@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HL 清算地图</title>
+<style>
+  :root{ --bg:#0d1117; --card:#161b22; --border:#2d333b; --fg:#e6edf3; --muted:#8b949e; --green:#3fb950; --red:#f85149; --blue:#58a6ff; --amber:#d29922; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:14px}
+  .wrap{max-width:960px;margin:0 auto;padding:16px}
+  h1{font-size:18px;margin:0}
+  .sub{color:var(--muted);font-size:12px;margin-top:2px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-top:12px}
+  .row{display:flex;align-items:center;gap:8px;padding:2px 0}
+  .px{width:110px;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);flex:none}
+  .barwrap{flex:1;display:flex;align-items:center;gap:6px}
+  .bar{height:14px;border-radius:3px;min-width:2px}
+  .bar.est-l{background:rgba(63,185,80,.35);border:1px solid rgba(63,185,80,.5)}
+  .bar.est-s{background:rgba(248,81,73,.35);border:1px solid rgba(248,81,73,.5)}
+  .bar.real-l{background:var(--green)}
+  .bar.real-s{background:var(--red)}
+  .amt{width:96px;font-family:ui-monospace,Menlo,monospace;font-size:12px;flex:none}
+  .tag{width:96px;font-size:11px;color:var(--muted);flex:none}
+  .tag.real{color:var(--blue)}
+  .ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  select,textarea,input[type=range]{background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px}
+  textarea{width:100%;height:70px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  button{background:#21262d;color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer}
+  button:hover{background:#2d333b}
+  button.primary{background:#1f6feb;border-color:#1f6feb}
+  .ctx{display:flex;flex-wrap:wrap;gap:16px;font-size:13px}
+  .ctx b{font-family:ui-monospace,Menlo,monospace}
+  .sec{font-size:13px;font-weight:600;margin:14px 0 6px}
+  .sec.l{color:var(--green)} .sec.s{color:var(--red)}
+  .mark{font-size:12px;color:var(--amber);font-weight:400}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+  th,td{border-bottom:1px solid var(--border);padding:5px 6px;text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:500}
+  td.num{font-family:ui-monospace,Menlo,monospace;text-align:right;white-space:nowrap}
+  .err{background:rgba(248,81,73,.12);border:1px solid var(--red);color:var(--red);border-radius:6px;padding:8px 12px;margin-top:12px;font-size:13px;display:none}
+  .foot{color:var(--muted);font-size:11px;line-height:1.7;margin-top:16px}
+  .badge{display:inline-block;background:#21262d;border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:11px;color:var(--muted);margin-left:6px;vertical-align:middle}
+  .prog{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>HL 清算地图<span class="badge">浏览器直连 · 无后端</span></h1>
+  <div class="sub">Hyperliquid 公开 API · 估算层(OI×杠杆假设) + 真实层(watchlist 链上仓位) · <span id="status">加载中…</span></div>
+  <div class="err" id="err"></div>
+
+  <div class="card">
+    <div class="ctl">
+      <select id="coin"></select>
+      <label style="font-size:12px;color:var(--muted)">多空假设 <span id="lsLabel">50/50</span></label>
+      <input type="range" id="ls" min="20" max="80" value="50" style="width:120px">
+      <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="auto" checked> 10秒自动刷新</label>
+      <button id="refresh">手动刷新</button>
+    </div>
+    <div class="ctx" id="ctx" style="margin-top:10px"></div>
+    <div class="sec l">多头强平区（现价下方）<span class="mark" id="markL"></span></div>
+    <div id="longs"></div>
+    <div class="sec s">空头强平区（现价上方）<span class="mark" id="markS"></span></div>
+    <div id="shorts"></div>
+  </div>
+
+  <div class="card">
+    <div class="sec" style="margin-top:0">Watchlist 真实仓位 <span class="mark">粘贴 0x 地址（每行一个，仅存本机浏览器）· 拉取链上 clearinghouseState，强平价为接口原值</span></div>
+    <textarea id="wl" placeholder="0x......&#10;0x......"></textarea>
+    <div class="ctl" style="margin-top:8px">
+      <button id="wlBtn" class="primary">拉取真实仓位</button>
+      <button id="wlClear">清空</button>
+      <span class="prog" id="wlProg"></span>
+    </div>
+    <div id="wlTable"></div>
+  </div>
+
+  <div class="foot">
+    <b>口径说明（重要，先读再看图）</b><br>
+    · <b>估算层</b>（半透明横条，金额显示为 <b>%OI</b> = 占该币未平仓量的比例）：该币未平仓名义(OI×标记价) × 杠杆分布假设[3x:10% / 5x:20% / 10x:30% / 20x:20% / 25x:10% / 40x:7% / 50x:3%，超出币种最大杠杆的档位自动剔除]，多空比例由上方滑块假设；强平价按简化公式 现价×(1∓1/杠杆)，未计维持保证金分档、手续费与全仓账户权益。<b>它是相对强度参考，不是真实持仓分布，也不是精确金额</b>，与商业平台估算档同性质。<br>
+    · <b>真实层</b>（不透明实心横条，金额为<b>美元名义</b>）：watchlist 地址的链上仓位，liquidationPx 为 Hyperliquid 接口返回原值（已按该账户实际的 cross/isolated 与保证金计算）。<br>
+    · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。<br>
+    · 币种范围：日成交 &gt; $10M（与信号监控列表同源，约 70+ 个）。
+  </div>
+</div>
+
+<script>
+const API='https://api.hyperliquid.xyz/info';
+const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
+let coins=[], cur=null, wlAll=[];
+
+const $=id=>document.getElementById(id);
+const fmtUSD=n=>{n=+n||0; if(n>=1e9)return(n/1e9).toFixed(2)+'B'; if(n>=1e6)return(n/1e6).toFixed(2)+'M'; if(n>=1e3)return(n/1e3).toFixed(1)+'K'; return n.toFixed(0);};
+const fmtPx=p=>{p=+p||0; if(p>=1000)return p.toLocaleString('en-US',{maximumFractionDigits:0}); if(p>=1)return p.toFixed(2); return p.toPrecision(3);};
+function showErr(e){const b=$('err'); b.style.display='block'; b.textContent='请求失败: '+e.message+'（HL API 偶发延迟，稍后自动重试）';}
+function clearErr(){$('err').style.display='none';}
+
+async function info(payload){
+  const c=new AbortController(); const t=setTimeout(()=>c.abort(),15000);
+  try{
+    const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:c.signal});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+async function loadCoins(){
+  const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
+  return meta.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:ctxs[i]}))
+    .filter(c=>parseFloat(c.ctx.dayNtlVlm)>1e7)
+    .sort((a,b)=>parseFloat(b.ctx.dayNtlVlm)-parseFloat(a.ctx.dayNtlVlm));
+}
+
+function estimate(c){
+  const mark=parseFloat(c.ctx.markPx), oiNtl=parseFloat(c.ctx.openInterest)*mark, ls=+$('ls').value/100;
+  const rows=[];
+  for(const t of TIERS){
+    if(t>c.maxLev) continue;
+    rows.push({t, liqL:mark*(1-1/t), liqS:mark*(1+1/t), nL:oiNtl*ls*W[t], nS:oiNtl*(1-ls)*W[t]});
+  }
+  return {mark,oiNtl,rows};
+}
+
+function barRow(px,n,tag,cls){
+  // 估算行(有pct字段)显示占OI比例；真实行显示美元名义
+  const amt = (n.pct!=null) ? n.pct.toFixed(1)+'%OI' : '$'+fmtUSD(n.v);
+  return `<div class="row"><span class="px">$${fmtPx(px)}</span><div class="barwrap"><div class="bar ${cls}" style="width:${n.w}%"></div></div><span class="amt">${amt}</span><span class="tag${n.real?' real':''}">${tag}</span></div>`;
+}
+
+async function refresh(){
+  clearErr();
+  try{
+    if(!coins.length){
+      coins=await loadCoins();
+      const sel=$('coin');
+      sel.innerHTML=coins.map(c=>`<option>${c.name}</option>`).join('');
+      if(coins.some(c=>c.name==='BTC')) sel.value='BTC';
+      sel.onchange=()=>refresh();
+    }
+    cur=coins.find(c=>c.name===$('coin').value)||coins[0];
+    const e=estimate(cur);
+    const f=parseFloat(cur.ctx.funding)*100;
+    $('ctx').innerHTML=`<span>标记价 <b>$${fmtPx(e.mark)}</b></span><span>未平仓名义 <b>$${fmtUSD(e.oiNtl)}</b></span><span>24h成交 <b>$${fmtUSD(cur.ctx.dayNtlVlm)}</b></span><span>资金费率(1h) <b style="color:${f>=0?'var(--green)':'var(--red)'}">${f.toFixed(4)}%</b></span><span>最大杠杆 <b>${cur.maxLev}x</b></span>`;
+    $('markL').textContent='现价 $'+fmtPx(e.mark);
+    $('markS').textContent='现价 $'+fmtPx(e.mark);
+    const L=e.rows.map(r=>({px:r.liqL,v:r.nL,tag:r.t+'x',pct:r.nL/e.oiNtl*100})).sort((a,b)=>b.px-a.px);
+    const S=e.rows.map(r=>({px:r.liqS,v:r.nS,tag:r.t+'x',pct:r.nS/e.oiNtl*100})).sort((a,b)=>a.px-b.px);
+    const rl=wlAll.filter(p=>p.coin===cur.name&&p.side==='L'&&p.liqPx>0).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1})).sort((a,b)=>b.px-a.px);
+    const rs=wlAll.filter(p=>p.coin===cur.name&&p.side==='S'&&p.liqPx>0).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1})).sort((a,b)=>a.px-b.px);
+    const maxN=Math.max(1,...L.map(x=>x.v),...S.map(x=>x.v),...rl.map(x=>x.v),...rs.map(x=>x.v));
+    const mk=arr=>arr.map(x=>({...x,w:Math.max(2,100*Math.log10(1+x.v/1e3)/Math.log10(1+maxN/1e3))}));
+    const allL=[...mk(L),...mk(rl)], allS=[...mk(S),...mk(rs)];
+    $('longs').innerHTML=allL.length?allL.map(x=>barRow(x.px,x,x.tag,x.real?'real-l':'est-l')).join(''):'<div class="prog">无数据</div>';
+    $('shorts').innerHTML=allS.length?allS.map(x=>barRow(x.px,x,x.tag,x.real?'real-s':'est-s')).join(''):'<div class="prog">无数据</div>';
+    $('status').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN');
+  }catch(e){ showErr(e); }
+}
+
+async function pool(items,n,fn){
+  let i=0;
+  await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{
+    while(i<items.length){ const k=i++; await fn(items[k],k); }
+  }));
+}
+
+async function loadWatchlist(){
+  const addrs=[...new Set($('wl').value.split(/[\s,;]+/).map(s=>s.trim()).filter(a=>/^0x[a-fA-F0-9]{40}$/.test(a)))];
+  localStorage.setItem('liqmap_watchlist',$('wl').value);
+  wlAll=[];
+  if(!addrs.length){ $('wlTable').innerHTML=''; refresh(); return; }
+  const out=[]; let done=0;
+  $('wlProg').textContent='0 / '+addrs.length;
+  await pool(addrs,8,async a=>{
+    try{
+      const st=await info({type:'clearinghouseState',user:a});
+      const eq=parseFloat(st.marginSummary.accountValue);
+      const ps=(st.assetPositions||[]).map(p=>{
+        const pos=p.position, szi=parseFloat(pos.szi);
+        return {coin:pos.coin, side:szi<0?'S':'L', szi:Math.abs(szi),
+                lev:pos.leverage.value, levType:pos.leverage.type,
+                entryPx:parseFloat(pos.entryPx), liqPx:parseFloat(pos.liquidationPx),
+                n:Math.abs(parseFloat(pos.positionValue)), upnl:parseFloat(pos.unrealizedPnl)};
+      });
+      out.push({addr:a,eq,ps});
+      for(const p of ps){
+        wlAll.push({coin:p.coin, side:p.side, liqPx:p.liqPx, n:p.n,
+                    tag:a.slice(0,6)+'…'+(p.levType==='cross'?'跨':'逐')+p.lev+'x'});
+      }
+    }catch(e){ out.push({addr:a,err:e.message}); }
+    $('wlProg').textContent=(++done)+' / '+addrs.length;
+  });
+  const rows=out.map(o=>{
+    if(o.err) return `<tr><td colspan="3" style="color:var(--red)">${o.addr.slice(0,10)}… 查询失败: ${o.err}</td></tr>`;
+    const ps=o.ps.map(p=>`<div>${p.coin} ${p.side==='L'?'多':'空'} ${p.szi} @${fmtPx(p.entryPx)} · ${p.levType==='cross'?'跨':'逐'}${p.lev}x · 强平 <b style="color:${p.side==='L'?'var(--green)':'var(--red)'}">$${fmtPx(p.liqPx)}</b> · 浮盈 ${p.upnl>=0?'+':''}$${fmtUSD(p.upnl)} · 名义 $${fmtUSD(p.n)}</div>`).join('')||'<span style="color:var(--muted)">无仓位</span>';
+    return `<tr><td style="white-space:nowrap">${o.addr.slice(0,8)}…${o.addr.slice(-4)}</td><td class="num">$${fmtUSD(o.eq)}</td><td>${ps}</td></tr>`;
+  }).join('');
+  $('wlTable').innerHTML=`<table><tr><th>地址</th><th style="text-align:right">账户值</th><th>仓位（币 方向 数量@入场 · 杠杆 · 强平价 · 浮盈 · 名义）</th></tr>${rows}</table>`;
+  refresh();
+}
+
+$('ls').oninput=()=>{ $('lsLabel').textContent=$('ls').value+'/'+(100-$('ls').value); refresh(); };
+$('refresh').onclick=()=>refresh();
+$('wlBtn').onclick=loadWatchlist;
+$('wlClear').onclick=()=>{ $('wl').value=''; wlAll=[]; localStorage.removeItem('liqmap_watchlist'); $('wlTable').innerHTML=''; refresh(); };
+$('wl').value=localStorage.getItem('liqmap_watchlist')||'';
+
+(async()=>{ await refresh(); setInterval(()=>{ if($('auto').checked) refresh(); },10000); })();
+</script>
+</body>
+</html>
