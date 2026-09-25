@@ -157,12 +157,13 @@ function barRow(px,n,tag,cls){
 function bucketize(rows,mark,side){
   const out={};
   for(const r of rows){
-    const d=Math.abs(r.px-mark)/mark;
+    const px=(r.px!=null?r.px:r.liqPx); // wlAll 真实行字段是 liqPx
+    const d=Math.abs(px-mark)/mark;
     for(const b of BANDS){
       if(d>=b[0]&&d<b[1]){
         if(!out[b[2]]) out[b[2]]={label:b[2],v:0,n:0,pxLo:Infinity,pxHi:0};
         const o=out[b[2]]; o.v+=r.v; o.n++;
-        o.pxLo=Math.min(o.pxLo,r.px); o.pxHi=Math.max(o.pxHi,r.px);
+        o.pxLo=Math.min(o.pxLo,px); o.pxHi=Math.max(o.pxHi,px);
         break;
       }
     }
@@ -179,6 +180,13 @@ async function refresh(){
       sel.innerHTML=coins.map(c=>`<option>${c.name}</option>`).join('');
       if(coins.some(c=>c.name==='BTC')) sel.value='BTC';
       sel.onchange=()=>refresh();
+    }else{
+      // 每次刷新重新拉取市场上下文（否则 mark/OI/资金费 冻屏在加载时刻）
+      try{
+        const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
+        const m={}; meta.universe.forEach((u,i)=>m[u.name]=ctxs[i]);
+        coins.forEach(c=>{ if(m[c.name]) c.ctx=m[c.name]; });
+      }catch(e){}
     }
     cur=coins.find(c=>c.name===$('coin').value)||coins[0];
     const e=estimate(cur), mark=e.mark;
