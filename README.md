@@ -1,28 +1,43 @@
 # HL 清算地图（hl-liqmap）
 
-纯静态单文件网页，浏览器直连 Hyperliquid 公开 API，无后端、无构建、无依赖。
+纯静态单文件网页 + GitHub Actions 每日地址收割。浏览器直连 Hyperliquid 公开 API，无后端、无构建、无依赖。
 
-## 上线步骤（全程网页操作，约 3 分钟）
+线上地址：**https://xyz1367487.github.io/hl-liqmap/**
 
-1. GitHub 新建 **public** repository（建议名 `hl-liqmap`）——public 仓库的 Actions 不限免费额度。
-2. 仓库页 → **Add file → Upload files** → 把本目录两个文件拖进去：
-   - `index.html`
-   - `README.md`
-   → Commit changes。
-3. 仓库 **Settings → Pages** → Source 选 `Deploy from a branch` → Branch 选 `main` / `/(root)` → Save。
-   半分钟后页面地址：`https://xyz1367487.github.io/hl-liqmap/`
-4. 仓库 **Settings → Actions → General → Workflow permissions** → 选 **Read and write permissions** → Save。
-   （索引器每天要往仓库回写数据文件，必须有写权限；此步在第二阶段接索引器之前做即可。）
+## 架构
 
-## 页面说明
+```
+index.html          页面（估算层 + watchlist 真实层 + 全网真实模式）
+harvest.py          地址收割器（每日由 Actions 运行）
+.github/workflows/harvest.yml   每日 UTC 00:10 自动运行 + 手动触发
+data/addresses.json 已发现地址索引（addr -> first_seen 日期）
+data/accounts.json  候选池（addr -> 快照账户值，≥$8k，页面按实时≥$10k 过滤）
+```
 
-- **估算层**（半透明横条，显示 `%OI` = 占该币未平仓量比例）：选中币种的未平仓名义(OI×标记价) × 杠杆分布假设，按简化强平公式现算。**假设驱动的相对强度参考，不是真实持仓分布，也不是精确金额**。
-- **真实层**（不透明实心横条，显示美元名义）：Watchlist 粘贴 0x 地址 → 逐个拉取链上 `clearinghouseState` → `liquidationPx` 为接口原值。名单只存你自己浏览器的 localStorage。
-- 币种范围：日成交 > $10M（约 70+ 个，与 HL-UPERP-MONITOR 监控列表同源）。
-- 10 秒自动刷新（估算层）；Watchlist 手动拉取，避免频繁请求。
-- 公开成交流无爆仓标记，本页不展示已成交爆仓事件。
+## 工作原理
 
-## 第二阶段（索引器，待页面效果确认后）
+**页面（打开即看，全部浏览器端完成）：**
+- **估算层**（半透明横条，`%OI`）：OI×标记价 × 杠杆分布假设 × 多空比例假设，简化强平公式现算。假设驱动的相对强度参考，非真实持仓。
+- **Watchlist 真实层**（实心横条，美元名义）：手动粘贴 0x 地址 → 链上 `clearinghouseState` 原值，`liquidationPx` 接口直接返回。
+- **全网真实模式**：读仓库内 `data/accounts.json` 候选池 → 浏览器并发实时拉取 → 仅渲染实时账户值 ≥$10k 的账户。多空方向天然为真。
 
-GitHub Actions 每日一次：订阅 WS 成交流收割地址 → 合并地址索引 → 提交回仓库。
-页面后续增加"全网真实模式"：读取仓库内地址索引，打开页面时批量拉取 >$10k 账户的真实仓位（真实层天然带多空方向，上线后估算层降级为对照）。
+**索引器（后台，每日一次）：**
+1. 拉日成交 >$10M 币种（与 HL-UPERP-MONITOR 监控列表同源）；
+2. WS 订阅这些币种的成交流，采集 180 秒，收割 `users` 字段地址；
+3. 新地址 + 候选池中 $8k~$12k 缓冲带老地址，逐个查 `clearinghouseState` 账户值；
+4. ≥$8k 进候选池，结果提交回仓库。
+
+**诚实边界**：HL 没有"按余额枚举账户"的公开端点，索引只覆盖"采集开始后活跃过的地址"——"全网"= 已发现地址的全网。索引随时间饱和（实测约 15 个新地址/秒/10 币种）。
+
+## 本地开发
+
+```bash
+# 冒烟测试（25 秒采集）
+HARVEST_SECONDS=25 python3 harvest.py
+```
+
+## 运维
+
+- 仓库需开启 **Settings → Actions → General → Workflow permissions → Read and write contents**（索引器回写 data/）
+- 手动触发收割：仓库 Actions → harvest → Run workflow
+- public 仓库 Actions 不限免费额度
