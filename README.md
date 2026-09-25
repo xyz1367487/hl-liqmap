@@ -1,6 +1,11 @@
 # HL 清算地图（hl-liqmap）
 
-纯静态单文件网页 + GitHub Actions 每日地址收割。浏览器直连 Hyperliquid 公开 API，无后端、无构建、无依赖。
+纯静态单文件网页 + GitHub Actions 每6小时地址收割。浏览器直连 Hyperliquid 公开 API，无后端、无构建、无依赖。
+
+## 许可证
+
+本项目基于 [GNU Affero 通用公共许可证 v3.0 (AGPL-3.0)](LICENSE) 发布。
+© 2026 xyz1367487。你可以自由使用、研究和修改本项目；但若你将修改后的版本作为网络服务向他人提供，必须以相同许可证公开你的完整源码。
 
 线上地址：**https://xyz1367487.github.io/hl-liqmap/**
 
