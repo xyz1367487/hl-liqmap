@@ -162,7 +162,7 @@ function bucketize(rows,mark,side){
     for(const b of BANDS){
       if(d>=b[0]&&d<b[1]){
         if(!out[b[2]]) out[b[2]]={label:b[2],v:0,n:0,pxLo:Infinity,pxHi:0};
-        const o=out[b[2]]; o.v+=r.v; o.n++;
+        const o=out[b[2]]; o.v+=(r.v!=null?r.v:r.n); o.n++;
         o.pxLo=Math.min(o.pxLo,px); o.pxHi=Math.max(o.pxHi,px);
         break;
       }
@@ -308,11 +308,14 @@ async function loadNet(){
   const curRows=rows.filter(o=>o.ps.some(p=>p.coin===cur.name)).sort((a,b)=>b.eq-a.eq);
   const longN=curRows.reduce((s,o)=>s+o.ps.filter(p=>p.coin===cur.name&&p.side==='L').reduce((t,p)=>t+p.n,0),0);
   const shortN=curRows.reduce((s,o)=>s+o.ps.filter(p=>p.coin===cur.name&&p.side==='S').reduce((t,p)=>t+p.n,0),0);
+  // 图中只画强平价有效(>0)的仓位；全仓深权益仓位的强平价HL返回0，无法定位，单列说明
+  const chartL=curRows.reduce((s,o)=>s+o.ps.filter(p=>p.coin===cur.name&&p.side==='L'&&p.liqPx>0).reduce((t,p)=>t+p.n,0),0);
+  const chartS=curRows.reduce((s,o)=>s+o.ps.filter(p=>p.coin===cur.name&&p.side==='S'&&p.liqPx>0).reduce((t,p)=>t+p.n,0),0);
   const trs=curRows.slice(0,50).map(o=>{
     const ps=o.ps.filter(p=>p.coin===cur.name).map(p=>`<div>${p.side==='L'?'多':'空'} ${p.szi} @${fmtPx(p.entryPx)} · ${p.levType==='cross'?'跨':'逐'}${p.lev}x · 强平 <b style="color:${p.side==='L'?'var(--green)':'var(--red)'}">$${fmtPx(p.liqPx)}</b> · 名义 $${fmtUSD(p.n)}</div>`).join('');
     return `<tr><td style="white-space:nowrap">${o.a.slice(0,8)}…${o.a.slice(-4)}</td><td class="num">$${fmtUSD(o.eq)}</td><td>${ps}</td></tr>`;
   }).join('');
-  $('netTable').innerHTML=`<div class="prog" style="margin:8px 0">实时账户值≥$10k：<b style="color:var(--fg)">${rows.length}</b> 个 · 其中持有 ${cur.name}：<b style="color:var(--fg)">${curRows.length}</b> 个 · 该币全网真实名义：多 <b style="color:var(--green)">$${fmtUSD(longN)}</b> / 空 <b style="color:var(--red)">$${fmtUSD(shortN)}</b>（仅已发现地址口径）${curRows.length>50?'<br>表格仅显示前50个账户':''}</div>`+(trs?`<table><tr><th>地址</th><th style="text-align:right">账户值</th><th>${cur.name} 仓位</th></tr>${trs}</table>`:'');
+  $('netTable').innerHTML=`<div class="prog" style="margin:8px 0">实时账户值≥$10k：<b style="color:var(--fg)">${rows.length}</b> 个 · 其中持有 ${cur.name}：<b style="color:var(--fg)">${curRows.length}</b> 个 · 该币全网真实名义：多 <b style="color:var(--green)">$${fmtUSD(longN)}</b> / 空 <b style="color:var(--red)">$${fmtUSD(shortN)}</b> · 图中可定位（强平价有效）：多 <b style="color:var(--green)">$${fmtUSD(chartL)}</b> / 空 <b style="color:var(--red)">$${fmtUSD(chartS)}</b>（仅已发现地址口径；全仓深权益仓位强平价接口返回0，无法上图）${curRows.length>50?'<br>表格仅显示前50个账户':''}</div>`+(trs?`<table><tr><th>地址</th><th style="text-align:right">账户值</th><th>${cur.name} 仓位</th></tr>${trs}</table>`:'');
   refresh();
 }
 
