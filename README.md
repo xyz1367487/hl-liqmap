@@ -8,8 +8,8 @@
 
 ```
 index.html          页面（估算层 + watchlist 真实层 + 全网真实模式）
-harvest.py          地址收割器（每日由 Actions 运行）
-.github/workflows/harvest.yml   每日 UTC 00:10 自动运行 + 手动触发
+harvest.py          地址收割器（每6小时由 Actions 运行）
+.github/workflows/harvest.yml   每6小时自动运行（UTC 00:10/06:10/12:10/18:10）+ 手动触发
 data/addresses.json 已发现地址索引（addr -> first_seen 日期）
 data/accounts.json  候选池（addr -> 快照账户值，≥$8k，页面按实时≥$10k 过滤）
 ```
@@ -21,9 +21,9 @@ data/accounts.json  候选池（addr -> 快照账户值，≥$8k，页面按实�
 - **Watchlist 真实层**（实心横条，美元名义）：手动粘贴 0x 地址 → 链上 `clearinghouseState` 原值，`liquidationPx` 接口直接返回。名单只存本机浏览器 localStorage。
 - **全网真实模式**：读仓库内 `data/accounts.json` 候选池 → 浏览器并发实时拉取 → 仅渲染实时账户值 ≥$10k 的账户。真实行默认按**离现价距离分桶聚合**（0-0.5% / 0.5-1% / 1-2% / 2-3% / 3-5% / 5-10% / 10-20% / 20%+，桶标签如“1-2%·47仓”），行数=桶数，地址再多不刷屏；勾选“逐地址显示”可展开（每侧最多 100 条，省略数在汇总行注明）。
 
-**索引器（后台，每日一次）：**
+**索引器（后台，每6小时一次）：**
 1. 拉日成交 >$10M 币种（与 HL-UPERP-MONITOR 监控列表同源）；
-2. WS 订阅这些币种的成交流，采集 180 秒，收割 `users` 字段地址；
+2. WS 订阅这些币种的成交流，采集 300 秒，收割 `users` 字段地址；
 3. 新地址 + 候选池中 $8k~$12k 缓冲带老地址，逐个查 `clearinghouseState` 账户值；
 4. ≥$8k 进候选池，结果提交回仓库。
 

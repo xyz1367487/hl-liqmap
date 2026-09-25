@@ -24,7 +24,7 @@ import websockets
 
 API = 'https://api.hyperliquid.xyz/info'
 WS_URL = 'wss://api.hyperliquid.xyz/ws'
-CAPTURE_SECONDS = int(os.environ.get('HARVEST_SECONDS', '180'))
+CAPTURE_SECONDS = int(os.environ.get('HARVEST_SECONDS', '300'))
 VOL_MIN = 10_000_000        # 币种日成交门槛（美元名义）
 POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
 RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址每日复查
