@@ -16,12 +16,12 @@
   .px{width:110px;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted);flex:none}
   .barwrap{flex:1;display:flex;align-items:center;gap:6px}
   .bar{height:14px;border-radius:3px;min-width:2px}
-  .bar.est-l{background:rgba(63,185,80,.35);border:1px solid rgba(63,185,80,.5)}
-  .bar.est-s{background:rgba(248,81,73,.35);border:1px solid rgba(248,81,73,.5)}
+  .bar.est-l{background:rgba(63,185,80,.30);border:1px solid rgba(63,185,80,.45)}
+  .bar.est-s{background:rgba(248,81,73,.30);border:1px solid rgba(248,81,73,.45)}
   .bar.real-l{background:var(--green)}
   .bar.real-s{background:var(--red)}
   .amt{width:96px;font-family:ui-monospace,Menlo,monospace;font-size:12px;flex:none}
-  .tag{width:104px;font-size:11px;color:var(--muted);flex:none}
+  .tag{width:110px;font-size:11px;color:var(--muted);flex:none}
   .tag.real{color:var(--blue)}
   .ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
   select,textarea,input[type=range]{background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px}
@@ -34,6 +34,12 @@
   .sec{font-size:13px;font-weight:600;margin:14px 0 6px}
   .sec.l{color:var(--green)} .sec.s{color:var(--red)}
   .mark{font-size:12px;color:var(--amber);font-weight:400}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11px;color:var(--muted);margin-top:8px;align-items:center}
+  .sw{display:inline-block;width:22px;height:10px;border-radius:2px;vertical-align:middle;margin-right:4px}
+  .sw.est-l{background:rgba(63,185,80,.30);border:1px solid rgba(63,185,80,.45)}
+  .sw.est-s{background:rgba(248,81,73,.30);border:1px solid rgba(248,81,73,.45)}
+  .sw.real-l{background:var(--green)}
+  .sw.real-s{background:var(--red)}
   table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
   th,td{border-bottom:1px solid var(--border);padding:5px 6px;text-align:left;vertical-align:top}
   th{color:var(--muted);font-weight:500}
@@ -42,23 +48,29 @@
   .foot{color:var(--muted);font-size:11px;line-height:1.7;margin-top:16px}
   .badge{display:inline-block;background:#21262d;border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:11px;color:var(--muted);margin-left:6px;vertical-align:middle}
   .prog{color:var(--muted);font-size:12px}
+  label.chk{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>HL 清算地图<span class="badge">浏览器直连 · 无后端</span></h1>
-  <div class="sub">Hyperliquid 公开 API · 估算层(OI×杠杆假设) + 真实层(watchlist / 全网索引) · <span id="status">加载中…</span></div>
+  <div class="sub">Hyperliquid 公开 API · 估算层(假设驱动) + 真实层(watchlist / 全网索引) · <span id="status">加载中…</span></div>
   <div class="err" id="err"></div>
 
   <div class="card">
     <div class="ctl">
       <select id="coin"></select>
-      <label style="font-size:12px;color:var(--muted)">多空假设 <span id="lsLabel">50/50</span></label>
-      <input type="range" id="ls" min="20" max="80" value="50" style="width:120px">
-      <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="auto" checked> 10秒自动刷新</label>
+      <label class="chk"><input type="checkbox" id="estToggle" checked> 显示估算层</label>
+      <label class="chk" title="仅作用于估算层的多空拆分假设"><input type="range" id="ls" min="20" max="80" value="50" style="width:100px"> 多空假设 <span id="lsLabel">50/50</span></label>
+      <label class="chk"><input type="checkbox" id="auto" checked> 10秒自动刷新</label>
       <button id="refresh">手动刷新</button>
     </div>
     <div class="ctx" id="ctx" style="margin-top:10px"></div>
+    <div class="legend">
+      <span><span class="sw est-l"></span>估算·假设驱动（%OI，非真实持仓）</span>
+      <span><span class="sw real-l"></span>真实·链上原值（美元名义）</span>
+      <span id="estHint" style="color:var(--amber);display:none">真实数据已就位，估算层已自动隐藏——勾选上方"显示估算层"可作对照</span>
+    </div>
     <div class="sec l">多头强平区（现价下方）<span class="mark" id="markL"></span></div>
     <div id="longs"></div>
     <div class="sec s">空头强平区（现价上方）<span class="mark" id="markS"></span></div>
@@ -80,27 +92,28 @@
     <div class="sec" style="margin-top:0">全网真实模式 <span class="mark">读取仓库内每日收割的地址索引（= 已发现地址，非字面全网）· 打开页面时实时拉取，仅渲染【实时账户值 ≥ $10k】的账户</span></div>
     <div class="ctl">
       <button id="netBtn" class="primary">拉取全网真实仓位</button>
+      <label class="chk" title="默认按离现价距离分桶聚合；勾选后逐地址显示（每侧最多100条）"><input type="checkbox" id="netAddrToggle"> 逐地址显示</label>
       <span class="prog" id="netProg"></span>
       <span class="prog" id="netMeta"></span>
     </div>
-    <div class="prog" id="netHint" style="margin-top:6px">候选池地址较多时拉取需要几分钟，进度实时显示；中途可切币种，图表会先渲染已完成的账户。</div>
+    <div class="prog" style="margin-top:6px">真实行默认按"离现价距离"分桶（0-0.5% / 0.5-1% / 1-2% / 2-3% / 3-5% / 5-10% / 10-20% / 20%+），行数=桶数，地址再多也不刷屏；候选池地址较多时拉取需要几分钟，中途可切币种。</div>
     <div id="netTable"></div>
   </div>
 
   <div class="foot">
     <b>口径说明（重要，先读再看图）</b><br>
-    · <b>估算层</b>（半透明横条，金额显示为 <b>%OI</b> = 占该币未平仓量的比例）：该币未平仓名义(OI×标记价) × 杠杆分布假设[3x:10% / 5x:20% / 10x:30% / 20x:20% / 25x:10% / 40x:7% / 50x:3%，超出币种最大杠杆的档位自动剔除]，多空比例由上方滑块假设；强平价按简化公式 现价×(1∓1/杠杆)，未计维持保证金分档、手续费与全仓账户权益。<b>它是相对强度参考，不是真实持仓分布，也不是精确金额</b>，与商业平台估算档同性质。<br>
-    · <b>真实层</b>（不透明实心横条，金额为<b>美元名义</b>）：watchlist 与全网模式拉取的都是链上 clearinghouseState 原值，liquidationPx 已按账户实际的 cross/isolated 与保证金计算。<br>
-    · <b>全网模式的边界</b>：Hyperliquid 没有"按余额枚举所有账户"的公开端点，索引由每日 WS 成交流地址收割自然生长（上线头几天很薄，一两周趋于饱和），因此"全网"= 已发现地址的全网；账户值门槛在拉取时按实时值判定（≥$10k）。<br>
-    · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。<br>
-    · 币种范围：日成交 &gt; $10M（与信号监控列表同源）。
+    · <b>估算层</b>（半透明横条，<b>%OI</b> = 占该币未平仓量比例）：未平仓名义(OI×标记价) × 杠杆分布假设[3x:10% / 5x:20% / 10x:30% / 20x:20% / 25x:10% / 40x:7% / 50x:3%，超币种最大杠杆档位自动剔除] × 多空比例滑块假设；强平价按简化公式 现价×(1∓1/杠杆)，未计维持保证金分档、手续费与全仓权益。<b>假设驱动的相对强度参考，不是真实持仓分布，也不是精确金额</b>。<br>
+    · <b>真实层</b>（实心横条，美元名义）：链上 clearinghouseState 原值，liquidationPx 已按账户实际的 cross/isolated 与保证金计算。全网模式默认按距离分桶聚合（桶标签如"1-2%·47仓"= 该距离带内 47 个仓位共 $X）；勾选"逐地址显示"可展开（每侧最多 100 条，其余省略数在汇总行注明）。<br>
+    · <b>全网模式的边界</b>：Hyperliquid 没有"按余额枚举所有账户"的公开端点，索引由每日 WS 成交流地址收割自然生长（头几天很薄，一两周趋于饱和），因此"全网"= 已发现地址的全网；$10k 门槛按拉取时实时账户值判定。<br>
+    · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。币种范围：日成交 &gt; $10M（与信号监控列表同源）。
   </div>
 </div>
 
 <script>
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
-let coins=[], cur=null, wlAll=[];
+const BANDS=[[0,.005,'0-0.5%'],[.005,.01,'0.5-1%'],[.01,.02,'1-2%'],[.02,.03,'2-3%'],[.03,.05,'3-5%'],[.05,.10,'5-10%'],[.10,.20,'10-20%'],[.20,Infinity,'20%+']];
+let coins=[], cur=null, wlAll=[], estManual=null, netPerAddr=false;
 
 const $=id=>document.getElementById(id);
 const fmtUSD=n=>{n=+n||0; if(n>=1e9)return(n/1e9).toFixed(2)+'B'; if(n>=1e6)return(n/1e6).toFixed(2)+'M'; if(n>=1e3)return(n/1e3).toFixed(1)+'K'; return n.toFixed(0);};
@@ -140,6 +153,23 @@ function barRow(px,n,tag,cls){
   return `<div class="row"><span class="px">$${fmtPx(px)}</span><div class="barwrap"><div class="bar ${cls}" style="width:${n.w}%"></div></div><span class="amt">${amt}</span><span class="tag${n.real?' real':''}">${tag}</span></div>`;
 }
 
+// 真实行按"离现价距离"分桶聚合
+function bucketize(rows,mark,side){
+  const out={};
+  for(const r of rows){
+    const d=Math.abs(r.px-mark)/mark;
+    for(const b of BANDS){
+      if(d>=b[0]&&d<b[1]){
+        if(!out[b[2]]) out[b[2]]={label:b[2],v:0,n:0,pxLo:Infinity,pxHi:0};
+        const o=out[b[2]]; o.v+=r.v; o.n++;
+        o.pxLo=Math.min(o.pxLo,r.px); o.pxHi=Math.max(o.pxHi,r.px);
+        break;
+      }
+    }
+  }
+  return Object.values(out).map(o=>({px: side==='L'?o.pxHi:o.pxLo, v:o.v, tag:o.label+'·'+o.n+'仓', real:1}));
+}
+
 async function refresh(){
   clearErr();
   try{
@@ -151,18 +181,44 @@ async function refresh(){
       sel.onchange=()=>refresh();
     }
     cur=coins.find(c=>c.name===$('coin').value)||coins[0];
-    const e=estimate(cur);
+    const e=estimate(cur), mark=e.mark;
     const f=parseFloat(cur.ctx.funding)*100;
-    $('ctx').innerHTML=`<span>标记价 <b>$${fmtPx(e.mark)}</b></span><span>未平仓名义 <b>$${fmtUSD(e.oiNtl)}</b></span><span>24h成交 <b>$${fmtUSD(cur.ctx.dayNtlVlm)}</b></span><span>资金费率(1h) <b style="color:${f>=0?'var(--green)':'var(--red)'}">${f.toFixed(4)}%</b></span><span>最大杠杆 <b>${cur.maxLev}x</b></span>`;
-    $('markL').textContent='现价 $'+fmtPx(e.mark);
-    $('markS').textContent='现价 $'+fmtPx(e.mark);
-    const L=e.rows.map(r=>({px:r.liqL,v:r.nL,tag:r.t+'x',pct:r.nL/e.oiNtl*100})).sort((a,b)=>b.px-a.px);
-    const S=e.rows.map(r=>({px:r.liqS,v:r.nS,tag:r.t+'x',pct:r.nS/e.oiNtl*100})).sort((a,b)=>a.px-b.px);
-    const rl=wlAll.filter(p=>p.coin===cur.name&&p.side==='L'&&p.liqPx>0).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1})).sort((a,b)=>b.px-a.px);
-    const rs=wlAll.filter(p=>p.coin===cur.name&&p.side==='S'&&p.liqPx>0).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1})).sort((a,b)=>a.px-b.px);
+    $('ctx').innerHTML=`<span>标记价 <b>$${fmtPx(mark)}</b></span><span>未平仓名义 <b>$${fmtUSD(e.oiNtl)}</b></span><span>24h成交 <b>$${fmtUSD(cur.ctx.dayNtlVlm)}</b></span><span>资金费率(1h) <b style="color:${f>=0?'var(--green)':'var(--red)'}">${f.toFixed(4)}%</b></span><span>最大杠杆 <b>${cur.maxLev}x</b></span>`;
+    $('markL').textContent='现价 $'+fmtPx(mark);
+    $('markS').textContent='现价 $'+fmtPx(mark);
+
+    // 估算行
+    const L=e.rows.map(r=>({px:r.liqL,v:r.nL,tag:r.t+'x',pct:r.nL/e.oiNtl*100}));
+    const S=e.rows.map(r=>({px:r.liqS,v:r.nS,tag:r.t+'x',pct:r.nS/e.oiNtl*100}));
+    // 真实行：watchlist 逐地址；全网按距离分桶（或逐地址top100）
+    const isL=p=>p.coin===cur.name&&p.side==='L'&&p.liqPx>0, isS=p=>p.coin===cur.name&&p.side==='S'&&p.liqPx>0;
+    const wlL=wlAll.filter(p=>isL(p)&&!p.net), wlS=wlAll.filter(p=>isS(p)&&!p.net);
+    const netL=wlAll.filter(p=>isL(p)&&p.net), netS=wlAll.filter(p=>isS(p)&&p.net);
+    let rl=wlL.map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1}));
+    let rs=wlS.map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1}));
+    let omit=0;
+    if(netPerAddr){
+      const topL=[...netL].sort((a,b)=>b.n-a.n), topS=[...netS].sort((a,b)=>b.n-a.n);
+      omit=Math.max(0,topL.length-100)+Math.max(0,topS.length-100);
+      rl.push(...topL.slice(0,100).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1})));
+      rs.push(...topS.slice(0,100).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1})));
+    }else{
+      rl.push(...bucketize(netL,mark,'L'));
+      rs.push(...bucketize(netS,mark,'S'));
+    }
+    if(omit>0) $('netMeta').textContent+=` · 逐地址视图每侧仅显示名义最大的100条，共省略 ${omit} 条`;
+
+    // 估算层显隐：默认自动（有真实数据时隐藏），用户手动切换后尊重选择
+    const hasReal=(rl.length+rs.length)>0;
+    const showEst=estManual===null?!hasReal:estManual;
+    $('estToggle').checked=showEst;
+    $('estHint').style.display=(estManual===null&&!showEst)?'inline':'none';
+
+    L.sort((a,b)=>b.px-a.px); S.sort((a,b)=>a.px-b.px);
+    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>a.px-b.px);
     const maxN=Math.max(1,...L.map(x=>x.v),...S.map(x=>x.v),...rl.map(x=>x.v),...rs.map(x=>x.v));
     const mk=arr=>arr.map(x=>({...x,w:Math.max(2,100*Math.log10(1+x.v/1e3)/Math.log10(1+maxN/1e3))}));
-    const allL=[...mk(L),...mk(rl)], allS=[...mk(S),...mk(rs)];
+    const allL=[...(showEst?mk(L):[]),...mk(rl)], allS=[...(showEst?mk(S):[]),...mk(rs)];
     $('longs').innerHTML=allL.length?allL.map(x=>barRow(x.px,x,x.tag,x.real?'real-l':'est-l')).join(''):'<div class="prog">无数据</div>';
     $('shorts').innerHTML=allS.length?allS.map(x=>barRow(x.px,x,x.tag,x.real?'real-s':'est-s')).join(''):'<div class="prog">无数据</div>';
     $('status').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN');
@@ -254,6 +310,8 @@ async function loadNet(){
 
 $('ls').oninput=()=>{ $('lsLabel').textContent=$('ls').value+'/'+(100-$('ls').value); refresh(); };
 $('refresh').onclick=()=>refresh();
+$('estToggle').onchange=()=>{ estManual=$('estToggle').checked; refresh(); };
+$('netAddrToggle').onchange=()=>{ netPerAddr=$('netAddrToggle').checked; refresh(); };
 $('wlBtn').onclick=loadWatchlist;
 $('wlClear').onclick=()=>{ $('wl').value=''; wlAll=wlAll.filter(p=>!p.net); localStorage.removeItem('liqmap_watchlist'); $('wlTable').innerHTML=''; refresh(); };
 $('netBtn').onclick=loadNet;
