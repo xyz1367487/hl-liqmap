@@ -34,6 +34,8 @@
   .sec{font-size:13px;font-weight:600;margin:14px 0 6px}
   .sec.l{color:var(--green)} .sec.s{color:var(--red)}
   .mark{font-size:12px;color:var(--amber);font-weight:400}
+  .markline{display:flex;align-items:center;gap:10px;margin:12px 0;color:var(--amber);font-size:12px;font-weight:700;white-space:nowrap}
+  .markline::before,.markline::after{content:"";flex:1;border-top:1px dashed var(--amber);opacity:.55}
   .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11px;color:var(--muted);margin-top:8px;align-items:center}
   .sw{display:inline-block;width:22px;height:10px;border-radius:2px;vertical-align:middle;margin-right:4px}
   .sw.est-l{background:rgba(63,185,80,.30);border:1px solid rgba(63,185,80,.45)}
@@ -69,12 +71,14 @@
     <div class="legend">
       <span><span class="sw est-l"></span>估算·假设驱动（%OI，非真实持仓）</span>
       <span><span class="sw real-l"></span>真实·链上原值（美元名义）</span>
+      <span>横条长度 ∝ 名义金额（线性刻度）</span>
       <span id="estHint" style="color:var(--amber);display:none">真实数据已就位，估算层已自动隐藏——勾选上方"显示估算层"可作对照</span>
     </div>
-    <div class="sec l">多头强平区（现价下方）<span class="mark" id="markL"></span></div>
-    <div id="longs"></div>
-    <div class="sec s">空头强平区（现价上方）<span class="mark" id="markS"></span></div>
+    <div class="sec s">空头强平区（现价上方）<span class="mark">价格从上往下递减</span></div>
     <div id="shorts"></div>
+    <div class="markline" id="markLine">现价</div>
+    <div class="sec l">多头强平区（现价下方）<span class="mark">价格从上往下递减</span></div>
+    <div id="longs"></div>
   </div>
 
   <div class="card">
@@ -192,8 +196,7 @@ async function refresh(){
     const e=estimate(cur), mark=e.mark;
     const f=parseFloat(cur.ctx.funding)*100;
     $('ctx').innerHTML=`<span>标记价 <b>$${fmtPx(mark)}</b></span><span>未平仓名义 <b>$${fmtUSD(e.oiNtl)}</b></span><span>24h成交 <b>$${fmtUSD(cur.ctx.dayNtlVlm)}</b></span><span>资金费率(1h) <b style="color:${f>=0?'var(--green)':'var(--red)'}">${f.toFixed(4)}%</b></span><span>最大杠杆 <b>${cur.maxLev}x</b></span>`;
-    $('markL').textContent='现价 $'+fmtPx(mark);
-    $('markS').textContent='现价 $'+fmtPx(mark);
+    $('markLine').textContent='现价 $'+fmtPx(mark);
 
     // 估算行
     const L=e.rows.map(r=>({px:r.liqL,v:r.nL,tag:r.t+'x',pct:r.nL/e.oiNtl*100}));
@@ -222,10 +225,10 @@ async function refresh(){
     $('estToggle').checked=showEst;
     $('estHint').style.display=(estManual===null&&!showEst)?'inline':'none';
 
-    L.sort((a,b)=>b.px-a.px); S.sort((a,b)=>a.px-b.px);
-    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>a.px-b.px);
+    L.sort((a,b)=>b.px-a.px); S.sort((a,b)=>b.px-a.px);
+    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>b.px-a.px);
     const maxN=Math.max(1,...L.map(x=>x.v),...S.map(x=>x.v),...rl.map(x=>x.v),...rs.map(x=>x.v));
-    const mk=arr=>arr.map(x=>({...x,w:Math.max(2,100*Math.log10(1+x.v/1e3)/Math.log10(1+maxN/1e3))}));
+    const mk=arr=>arr.map(x=>({...x,w:Math.max(1.5,100*x.v/maxN)})); // 线性刻度：长度与名义金额成正比
     const allL=[...(showEst?mk(L):[]),...mk(rl)], allS=[...(showEst?mk(S):[]),...mk(rs)];
     $('longs').innerHTML=allL.length?allL.map(x=>barRow(x.px,x,x.tag,x.real?'real-l':'est-l')).join(''):'<div class="prog">无数据</div>';
     $('shorts').innerHTML=allS.length?allS.map(x=>barRow(x.px,x,x.tag,x.real?'real-s':'est-s')).join(''):'<div class="prog">无数据</div>';
