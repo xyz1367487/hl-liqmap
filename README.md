@@ -14,7 +14,7 @@
 ```
 index.html          页面（估算层 + watchlist 真实层 + 全网真实模式）
 harvest.py          地址收割器（每6小时由 Actions 运行）
-.github/workflows/harvest.yml   每6小时自动运行（UTC 00:10/06:10/12:10/18:10）+ 手动触发
+.github/workflows/harvest.yml   每6小时自动运行（北京时间 09:40/15:40/21:40/03:40）+ 手动触发
 data/addresses.json 已发现地址索引（addr -> first_seen 日期）
 data/accounts.json  候选池（addr -> 快照账户值，≥$8k，页面按实时≥$10k 过滤）
 ```
