@@ -33,6 +33,7 @@
 import json
 import os
 import time
+import http.client
 import urllib.request
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -48,7 +49,8 @@ VOL_MIN = 10_000_000        # 币种日成交门槛（美元名义）
 POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
 RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址复查
 CONCURRENCY = 10
-SNAP_CONCURRENCY = 6       # 快照模式并发：实测 16 并发(≈67请求/秒)会被 HL 软限流（响应缺字段被误判为低净值），6 并发约 25 请求/秒安全
+SNAP_CONCURRENCY = 6       # 快照模式并发：每 worker 一条长连接 + pacing，合计约 22 请求/秒（实测安全区）
+SNAP_PACE = float(os.environ.get('HARVEST_SNAP_PACE', '0.35'))  # 每地址间隔秒数
 SNAP_LIMIT = int(os.environ.get('HARVEST_SNAPSHOT_LIMIT', '0'))  # 冒烟测试用：>0 只拉前 N 个地址
 TODAY = time.strftime('%Y-%m-%d', time.gmtime())
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
@@ -210,19 +212,27 @@ def seg_note(hstats):
     return f'采集{hstats["segments"]}段/断线{hstats["segment_fails"]}次'
 
 
+def _f(v):
+    """HL 对全仓深权益仓位的 liquidationPx 等字段会返回 null——按 0 处理（与页面口径一致：强平价无效则不上图）"""
+    try:
+        return float(v) if v is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _positions_of(st):
     """clearinghouseState → 紧凑仓位元组 [coin, side, szi, entryPx, liqPx, notional, lev, levType]"""
     out = []
     for p in st.get('assetPositions', []):
         pos = p['position']
-        szi = float(pos['szi'])
-        lev = pos.get('leverage', {}) or {}
+        szi = _f(pos.get('szi'))
+        lev = pos.get('leverage') if isinstance(pos.get('leverage'), dict) else {}
         out.append([pos['coin'],
                     'S' if szi < 0 else 'L',
                     abs(szi),
-                    float(pos['entryPx']),
-                    float(pos['liquidationPx']),
-                    abs(float(pos['positionValue'])),
+                    _f(pos.get('entryPx')),
+                    _f(pos.get('liquidationPx')),
+                    abs(_f(pos.get('positionValue'))),
                     lev.get('value'),
                     lev.get('type')])
     return out
@@ -248,41 +258,82 @@ def snapshot_mode():
 
     prog = {'n': 0}
     cnt = {'ok': 0, 'below': 0, 'fail': 0}
+    bad = {'sample': None}
 
-    def work(a):
-        try:
-            st = info({'type': 'clearinghouseState', 'user': a})
-            if 'marginSummary' not in st:
-                # HL 软限流时可能返回缺字段的 200 响应——必须当失败重试，不能当"余额不足"静默丢弃
-                raise ValueError('响应缺少 marginSummary（疑似限流/软失败）')
-            eq = float(st.get('marginSummary', {}).get('accountValue', 0))
-            if eq < 10000:
-                cnt['below'] += 1
-                return None
-            pos = _positions_of(st)
+    def _new_conn():
+        return http.client.HTTPSConnection('api.hyperliquid.xyz', 443, timeout=20)
+
+    def worker(chunk):
+        """每 worker 一条长连接跑完自己的地址块——urllib 每请求新建连接会被 HL 掐（实测52%失败）"""
+        box = {'conn': _new_conn()}
+        res = []
+
+        def post(payload):
+            c = box['conn']
+            c.request('POST', '/info', json.dumps(payload),
+                      {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'})
+            r = c.getresponse()
+            raw = r.read()
+            if r.status != 200:
+                raise IOError(f'HTTP {r.status}')
+            return json.loads(raw)
+
+        def reconnect():
             try:
-                sx = info({'type': 'clearinghouseState', 'user': a, 'dex': 'xyz'})
-                if 'assetPositions' in sx:
-                    pos.extend(_positions_of(sx))
+                box['conn'].close()
             except Exception:
-                pass  # xyz 拉挂不丢主 dex 数据
-            cnt['ok'] += 1
-            return {'a': a, 'e': round(eq, 2), 'p': pos}
-        except Exception:
-            cnt['fail'] += 1
-            return None
-        finally:
+                pass
+            box['conn'] = _new_conn()
+
+        for a in chunk:
+            rec = ('fail', None)
+            for attempt in range(3):
+                try:
+                    st = post({'type': 'clearinghouseState', 'user': a})
+                    if 'marginSummary' not in st:
+                        if not bad['sample']:
+                            bad['sample'] = str(st)[:200]
+                        raise ValueError('响应缺 marginSummary（软失败）')
+                    eq = float(st['marginSummary']['accountValue'])
+                    if eq < 10000:
+                        rec = ('below', None)
+                        break
+                    pos = _positions_of(st)
+                    try:
+                        sx = post({'type': 'clearinghouseState', 'user': a, 'dex': 'xyz'})
+                        if 'assetPositions' in sx:
+                            pos.extend(_positions_of(sx))
+                    except Exception:
+                        reconnect()  # xyz 拉挂不丢主 dex 数据，但要换条干净连接
+                    rec = ('ok', {'a': a, 'e': round(eq, 2), 'p': pos})
+                    break
+                except Exception:
+                    reconnect()
+                    if attempt == 2:
+                        rec = ('fail', None)
+                    else:
+                        time.sleep(1.0 * (attempt + 1))
+            res.append(rec)
             prog['n'] += 1
             if prog['n'] % 200 == 0:
                 print(f'[snapshot] {prog["n"]}/{len(pool)}', flush=True)
+            time.sleep(SNAP_PACE)  # 全局 pacing：6 worker × 2请求 ÷ (请求时延+0.35s) ≈ 22 请求/秒
+        try:
+            box['conn'].close()
+        except Exception:
+            pass
+        return res
 
     out = []
     t0 = time.time()
     if pool:
+        chunks = [pool[i::SNAP_CONCURRENCY] for i in range(SNAP_CONCURRENCY)]
         with ThreadPoolExecutor(max_workers=SNAP_CONCURRENCY) as ex:
-            for r in ex.map(work, pool):
-                if r:
-                    out.append(r)
+            for res in ex.map(worker, chunks):
+                for tag, rec in res:
+                    cnt[tag] += 1
+                    if rec:
+                        out.append(rec)
 
     snap = {
         'ts': time.strftime('%Y-%m-%dT%H:%M:%S+08:00', time.gmtime(time.time() + 8 * 3600)),
@@ -298,8 +349,10 @@ def snapshot_mode():
     size = os.path.getsize(snap_path)
     print(f'[snapshot] 完成：≥$10k 账户 {len(out)} 个（ok {cnt["ok"]} / 低于门槛 {cnt["below"]} / '
           f'失败 {cnt["fail"]}）· 文件 {size // 1024}KB · 耗时 {round(time.time() - t0)}s', flush=True)
+    if bad['sample']:
+        print(f'[snapshot] 异常响应样本: {bad["sample"]}', flush=True)
     if cnt['fail'] > len(pool) * 0.05:
-        print(f'[snapshot] ⚠️ 失败率 {cnt["fail"]/len(pool)*100:.0f}% 偏高，疑似被限流，下次考虑再降并发', flush=True)
+        print(f'[snapshot] ⚠️ 失败率 {cnt["fail"]/len(pool)*100:.0f}% 偏高，疑似被限流，下次考虑再降并发/加大 pacing', flush=True)
 
 
 if __name__ == '__main__':
