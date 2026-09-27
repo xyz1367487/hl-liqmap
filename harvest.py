@@ -16,14 +16,16 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """hl-liqmap 地址收割器（Phase 2）
 
-每日运行一次：
-1. 拉取日成交 > $10M 的币种列表（与页面、信号监控列表同源）；
-2. 订阅这些币种的 WS 成交流，采集 N 秒（默认 180s），收割 users 字段里的地址；
+每6小时运行一次（北京 09:40/15:40/21:40/03:40，UTC 40 1,7,13,19）：
+1. 拉取日成交 > $10M 的币种列表（主 dex + xyz builder dex 双 dex，与页面同源）；
+2. 分段订阅 WS 成交流（默认 5×60s，段间重连、断线自动续采，连续失败5次才放弃），
+   收割 users 字段里的地址——xyz-only 交易者因此也能进索引；
 3. 合并进 data/addresses.json（记录 first_seen）；
 4. 对【新地址】+【候选池中 $8k~$12k 缓冲带的老地址】逐个查 clearinghouseState：
-   - 账户值 >= $8k 进候选池 data/accounts.json；
+   - 账户值 >= $8k 进候选池 data/accounts.json（主 dex 的 accountValue = 账户总值，
+     含 xyz 子账户，实测口径，无需双拉）；
    - 掉出 $8k 的从候选池移除（仍在 addresses 索引中）；
-5. 页面侧对候选池地址实时拉取，按【实时账户值 >= $10k】过滤渲染。
+5. 收割统计（查询数/成功/失败/失败率/分段情况/耗时）写进 data meta，页面可查。
 
 诚实边界：HL 无"按余额枚举账户"端点，索引只能覆盖"采集开始后活跃过的地址"，
 所以"全网"永远是"已发现地址的全网"。
@@ -40,9 +42,11 @@ import websockets
 API = 'https://api.hyperliquid.xyz/info'
 WS_URL = 'wss://api.hyperliquid.xyz/ws'
 CAPTURE_SECONDS = int(os.environ.get('HARVEST_SECONDS', '300'))
+SEGMENT_SECONDS = int(os.environ.get('HARVEST_SEGMENT', '60'))  # 单段时长，段间重连
+MAX_SEG_FAILS = 5                                              # 连续段失败上限，超过则带着已有地址收工
 VOL_MIN = 10_000_000        # 币种日成交门槛（美元名义）
 POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
-RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址每日复查
+RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址复查
 CONCURRENCY = 10
 TODAY = time.strftime('%Y-%m-%d', time.gmtime())
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
@@ -65,42 +69,64 @@ def info(payload, retries=2):
 
 
 def load_coins():
-    meta, ctxs = info({'type': 'metaAndAssetCtxs'})
+    """主 dex + xyz builder dex 双 dex，返回日成交>$10M 的币种全名列表"""
     coins = []
-    for i, u in enumerate(meta['universe']):
-        try:
-            if float(ctxs[i]['dayNtlVlm']) > VOL_MIN:
-                coins.append(u['name'])
-        except Exception:
-            pass
+    for dex in (None, 'xyz'):
+        payload = {'type': 'metaAndAssetCtxs'}
+        if dex:
+            payload['dex'] = dex
+        meta, ctxs = info(payload)
+        for i, u in enumerate(meta['universe']):
+            try:
+                if float(ctxs[i]['dayNtlVlm']) > VOL_MIN:
+                    coins.append(u['name'])
+            except Exception:
+                pass
     return coins
 
 
 async def harvest(coins):
+    """分段订阅 + 断线重连；返回 (地址set, 采集统计dict)"""
     addrs = set()
     t0 = time.time()
-    async with websockets.connect(WS_URL) as ws:
-        for c in coins:
-            await ws.send(json.dumps({
-                'method': 'subscribe',
-                'subscription': {'type': 'trades', 'coin': c},
-            }))
-        print(f'[harvest] subscribed {len(coins)} coins, capturing {CAPTURE_SECONDS}s', flush=True)
-        while time.time() - t0 < CAPTURE_SECONDS:
-            try:
-                msg = await asyncio.wait_for(ws.recv(), timeout=20)
-            except asyncio.TimeoutError:
-                continue
-            try:
-                d = json.loads(msg)
-            except Exception:
-                continue
-            if d.get('channel') == 'trades':
-                for tr in d.get('data', []):
-                    for u in tr.get('users', []):
-                        addrs.add(u.lower())
-    print(f'[harvest] {len(addrs)} distinct addresses in {CAPTURE_SECONDS}s', flush=True)
-    return addrs
+    seg = 0
+    fails = 0
+    while time.time() - t0 < CAPTURE_SECONDS:
+        seg += 1
+        dur = min(SEGMENT_SECONDS, CAPTURE_SECONDS - (time.time() - t0))
+        try:
+            async with websockets.connect(WS_URL) as ws:
+                for c in coins:
+                    await ws.send(json.dumps({
+                        'method': 'subscribe',
+                        'subscription': {'type': 'trades', 'coin': c},
+                    }))
+                seg_t0 = time.time()
+                while time.time() - seg_t0 < dur:
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=20)
+                    except asyncio.TimeoutError:
+                        continue
+                    try:
+                        d = json.loads(msg)
+                    except Exception:
+                        continue
+                    if d.get('channel') == 'trades':
+                        for tr in d.get('data', []):
+                            for u in tr.get('users', []):
+                                addrs.add(u.lower())
+            fails = 0
+            print(f'[harvest] 段{seg}完成 {dur:.0f}s，累计 {len(addrs)} 地址', flush=True)
+        except Exception as e:
+            fails += 1
+            print(f'[harvest] 段{seg}断线({e})，连续第{fails}次失败，5s后重连', flush=True)
+            if fails >= MAX_SEG_FAILS:
+                print(f'[harvest] 连续失败{fails}次，放弃剩余采集，带着已有 {len(addrs)} 地址收工', flush=True)
+                break
+            await asyncio.sleep(5)
+    stats = {'segments': seg, 'segment_fails': fails}
+    print(f'[harvest] 共 {len(addrs)} 个不同地址（预算 {CAPTURE_SECONDS}s / {seg} 段）', flush=True)
+    return addrs, stats
 
 
 def get_equity(addr):
@@ -109,9 +135,10 @@ def get_equity(addr):
 
 
 def main():
+    t_start = time.time()
     coins = load_coins()
-    print(f'[coins] {len(coins)} coins with dayNtlVlm > ${VOL_MIN:,}', flush=True)
-    harvested = asyncio.run(harvest(coins))
+    print(f'[coins] {len(coins)} coins with dayNtlVlm > ${VOL_MIN:,}（主+xyz双dex）', flush=True)
+    harvested, hstats = asyncio.run(harvest(coins))
 
     addr_path = os.path.join(DATA_DIR, 'addresses.json')
     acc_path = os.path.join(DATA_DIR, 'accounts.json')
@@ -129,17 +156,16 @@ def main():
     print(f'[merge] {len(new_addrs)} new addresses; {len(recheck)} buffer-band rechecks', flush=True)
     print(f'[equity] checking {len(todo)} addresses, concurrency {CONCURRENCY}', flush=True)
 
-    done = 0
-    lock_free = {'n': 0}
+    prog = {'n': 0}
 
     def work(a):
         try:
             v = get_equity(a)
         except Exception:
             v = None
-        lock_free['n'] += 1
-        if lock_free['n'] % 200 == 0:
-            print(f'[equity] {lock_free["n"]}/{len(todo)}', flush=True)
+        prog['n'] += 1
+        if prog['n'] % 200 == 0:
+            print(f'[equity] {prog["n"]}/{len(todo)}', flush=True)
         return a, v
 
     results = {}
@@ -148,6 +174,8 @@ def main():
             for a, v in ex.map(work, todo):
                 results[a] = v
 
+    ok = sum(1 for v in results.values() if v is not None)
+    failed = len(results) - ok
     for a in new_addrs:
         addresses[a] = TODAY
     for a, v in results.items():
@@ -156,12 +184,28 @@ def main():
         elif v is not None and a in accounts and v < POOL_MIN:
             del accounts[a]
 
+    run_seconds = round(time.time() - t_start)
+    stats = {
+        'queried': len(todo), 'ok': ok, 'failed': failed,
+        'fail_rate': round(failed / len(todo), 4) if todo else 0,
+        'new_addresses': len(new_addrs), 'rechecks': len(recheck),
+        'captured': len(harvested), 'coins': len(coins),
+        'run_seconds': run_seconds,
+        'segments': hstats['segments'], 'segment_fails': hstats['segment_fails'],
+    }
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(addr_path, 'w') as f:
         json.dump({'updated': TODAY, 'count': len(addresses), 'addresses': addresses}, f)
     with open(acc_path, 'w') as f:
-        json.dump({'updated': TODAY, 'pool_min': POOL_MIN, 'count': len(accounts), 'accounts': accounts}, f)
-    print(f'[done] addresses={len(addresses)} pool(>=${POOL_MIN})={len(accounts)}', flush=True)
+        json.dump({'updated': TODAY, 'pool_min': POOL_MIN, 'count': len(accounts),
+                   'stats': stats, 'accounts': accounts}, f)
+    print(f'[done] addresses={len(addresses)} pool={len(accounts)} | '
+          f'查询 {len(todo)} 成功 {ok} 失败 {failed} ({stats["fail_rate"]*100:.1f}%) | '
+          f'{seg_note(hstats)} | {run_seconds}s', flush=True)
+
+
+def seg_note(hstats):
+    return f'采集{hstats["segments"]}段/断线{hstats["segment_fails"]}次'
 
 
 if __name__ == '__main__':

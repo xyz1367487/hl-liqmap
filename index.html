@@ -21,6 +21,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HL 清算地图</title>
+<link rel="preconnect" href="https://api.hyperliquid.xyz">
 <style>
   :root{ --bg:#0d1117; --card:#161b22; --border:#2d333b; --fg:#e6edf3; --muted:#8b949e; --green:#3fb950; --red:#f85149; --blue:#58a6ff; --amber:#d29922; }
   *{box-sizing:border-box}
@@ -73,7 +74,7 @@
 <body>
 <div class="wrap">
   <h1>HL 清算地图<span class="badge">浏览器直连 · 无后端</span></h1>
-  <div class="sub">Hyperliquid 公开 API · 估算层(假设驱动) + 真实层(watchlist / 全网索引) · <span id="status">加载中…</span></div>
+  <div class="sub">Hyperliquid 公开 API · 主 dex + xyz 股票永续双 dex · 估算层(假设驱动) + 真实层(watchlist / 全网索引) · <span id="status">加载中…</span></div>
   <div class="err" id="err"></div>
 
   <div class="card">
@@ -99,7 +100,7 @@
   </div>
 
   <div class="card">
-    <div class="sec" style="margin-top:0">Watchlist 真实仓位 <span class="mark">粘贴 0x 地址（每行一个，仅存本机浏览器）· 拉取链上 clearinghouseState，强平价为接口原值</span></div>
+    <div class="sec" style="margin-top:0">Watchlist 真实仓位 <span class="mark">粘贴 0x 地址（每行一个，仅存本机浏览器）· 拉取链上 clearinghouseState（主 dex + xyz 双 dex），强平价为接口原值</span></div>
     <textarea id="wl" placeholder="0x......&#10;0x......"></textarea>
     <div class="ctl" style="margin-top:8px">
       <button id="wlBtn" class="primary">拉取真实仓位</button>
@@ -110,22 +111,22 @@
   </div>
 
   <div class="card">
-    <div class="sec" style="margin-top:0">全网真实模式 <span class="mark">读取仓库内每日收割的地址索引（= 已发现地址，非字面全网）· 打开页面时实时拉取，仅渲染【实时账户值 ≥ $10k】的账户</span></div>
+    <div class="sec" style="margin-top:0">全网真实模式 <span class="mark">读取仓库内收割的地址索引（= 已发现地址，非字面全网）· 打开页面时实时拉取（主 dex + xyz 双 dex），仅渲染【实时账户值 ≥ $10k】的账户</span></div>
     <div class="ctl">
       <button id="netBtn" class="primary">拉取全网真实仓位</button>
       <label class="chk" title="默认按离现价距离分桶聚合；勾选后逐地址显示（每侧最多100条）"><input type="checkbox" id="netAddrToggle"> 逐地址显示</label>
       <span class="prog" id="netProg"></span>
       <span class="prog" id="netMeta"></span>
     </div>
-    <div class="prog" style="margin-top:6px">真实行默认按"离现价距离"分桶（0-0.5% / 0.5-1% / 1-2% / 2-3% / 3-5% / 5-10% / 10-20% / 20%+），行数=桶数，地址再多也不刷屏；候选池地址较多时拉取需要一两分钟，中途可切币种。拉取结果自动存本机快照（6小时内有效）——白屏、刷新、标签页被系统回收后，重开网页自动恢复，秒看不用重拉。</div>
+    <div class="prog" style="margin-top:6px">真实行默认按"离现价距离"分桶（0-0.5% / 0.5-1% / 1-2% / 2-3% / 3-5% / 5-10% / 10-20% / 20%+），行数=桶数，地址再多也不刷屏；中途可切币种。拉取结果自动存本机快照（6小时内有效）——白屏、刷新、标签页被系统回收后，重开网页自动恢复并后台静默更新，秒看不用重拉。</div>
     <div id="netTable"></div>
   </div>
 
   <div class="foot">
     <b>口径说明（重要，先读再看图）</b><br>
     · <b>估算层</b>（半透明横条，<b>%OI</b> = 占该币未平仓量比例）：未平仓名义(OI×标记价) × 杠杆分布假设[3x:10% / 5x:20% / 10x:30% / 20x:20% / 25x:10% / 40x:7% / 50x:3%，超币种最大杠杆档位自动剔除] × 多空比例滑块假设；强平价按简化公式 现价×(1∓1/杠杆)，未计维持保证金分档、手续费与全仓权益。<b>假设驱动的相对强度参考，不是真实持仓分布，也不是精确金额</b>。<br>
-    · <b>真实层</b>（实心横条，美元名义）：链上 clearinghouseState 原值，liquidationPx 已按账户实际的 cross/isolated 与保证金计算。全网模式默认按距离分桶聚合（桶标签如"1-2%·47仓"= 该距离带内 47 个仓位共 $X）；勾选"逐地址显示"可展开（每侧最多 100 条，其余省略数在汇总行注明）。<br>
-    · <b>全网模式的边界</b>：Hyperliquid 没有"按余额枚举所有账户"的公开端点，索引由每6小时 WS 成交流地址收割自然生长（预计4-7天趋于饱和），因此"全网"= 已发现地址的全网；$10k 门槛按拉取时实时账户值判定。<br>
+    · <b>真实层</b>（实心横条，美元名义）：链上 clearinghouseState 原值，liquidationPx 已按账户实际的 cross/isolated 与保证金计算。**双 dex 覆盖**：每个地址拉两次——主 dex（账户总值+加密永续仓）与 xyz dex（股票/商品永续仓，如 xyz:TSLA）；账户值 $10k 门槛按主 dex 的账户总值判定。全网模式默认按距离分桶聚合（桶标签如"1-2%·47仓"= 该距离带内 47 个仓位共 $X）；勾选"逐地址显示"可展开（每侧最多 100 条，其余省略数在汇总行注明）。<br>
+    · <b>全网模式的边界</b>：Hyperliquid 没有"按余额枚举所有账户"的公开端点，索引由每6小时 WS 成交流（主 dex + xyz 双 dex）地址收割自然生长（预计4-7天趋于饱和），因此"全网"= 已发现地址的全网；$10k 门槛按拉取时实时账户值判定。<br>
     · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。币种范围：日成交 &gt; $10M（与信号监控列表同源）。
   </div>
 </div>
@@ -134,6 +135,7 @@
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
 const BANDS=[[0,.005,'0-0.5%'],[.005,.01,'0.5-1%'],[.01,.02,'1-2%'],[.02,.03,'2-3%'],[.03,.05,'3-5%'],[.05,.10,'5-10%'],[.10,.20,'10-20%'],[.20,Infinity,'20%+']];
+const NET_CONCURRENCY=16; // 实测：HL服务端16并发附近到吞吐平台期(~22地址/秒)，8→16近乎翻倍
 let coins=[], cur=null, wlAll=[], estManual=null, netPerAddr=false, netFetching=false;
 
 const $=id=>document.getElementById(id);
@@ -145,19 +147,41 @@ function clearErr(){$('err').style.display='none';}
 window.addEventListener('error',e=>{const b=$('err'); if(b&&b.style.display==='none'){b.style.display='block'; b.textContent='页面出现未捕获错误: '+(e.message||e.type)+' —— 刷新即可恢复（拉取结果有本机快照）';}});
 window.addEventListener('unhandledrejection',e=>{const b=$('err'); if(b&&b.style.display==='none'){b.style.display='block'; b.textContent='请求出现未处理异常: '+(e.reason&&e.reason.message||e.reason)+' —— 刷新即可恢复';}});
 
-async function info(payload){
-  const c=new AbortController(); const t=setTimeout(()=>c.abort(),15000);
-  try{
-    const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:c.signal});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return await r.json();
-  } finally { clearTimeout(t); }
+// P3：失败自动重试×2 + 退避（原为静默跳过=账户凭空消失）
+async function info(payload, retries=2){
+  for(let i=0;i<=retries;i++){
+    const c=new AbortController(); const t=setTimeout(()=>c.abort(),15000);
+    try{
+      const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:c.signal});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return await r.json();
+    }catch(e){
+      if(i===retries) throw e;
+      await new Promise(res=>setTimeout(res,300*(i+1)));
+    } finally { clearTimeout(t); }
+  }
+}
+
+// 双 dex 账户拉取：主 dex（账户总值+加密永续仓）+ xyz dex（股票/商品永续仓），并发发请求
+async function fetchAccount(addr){
+  const [stMain,stXyz]=await Promise.all([
+    info({type:'clearinghouseState',user:addr}),
+    info({type:'clearinghouseState',user:addr,dex:'xyz'}).catch(()=>({assetPositions:[]})) // xyz 拉挂不拖累主 dex 数据
+  ]);
+  const eq=parseFloat(stMain.marginSummary.accountValue); // 主 dex 的 accountValue = 账户总值（含 xyz 子账户，实测口径）
+  const ps=parsePositions(stMain).concat(parsePositions(stXyz));
+  return {eq,ps};
 }
 
 async function loadCoins(){
   const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
-  return meta.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:ctxs[i]}))
-    .filter(c=>parseFloat(c.ctx.dayNtlVlm)>1e7)
+  let all=meta.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:ctxs[i]}));
+  // xyz builder dex（股票/商品永续），字段与主 dex 同构
+  try{
+    const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
+    all=all.concat(m2.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:c2[i]})));
+  }catch(e){}
+  return all.filter(c=>parseFloat(c.ctx.dayNtlVlm)>1e7)
     .sort((a,b)=>parseFloat(b.ctx.dayNtlVlm)-parseFloat(a.ctx.dayNtlVlm));
 }
 
@@ -205,10 +229,15 @@ async function refresh(){
       if(coins.some(c=>c.name==='BTC')) sel.value='BTC';
       sel.onchange=()=>refresh();
     }else{
-      // 每次刷新重新拉取市场上下文（否则 mark/OI/资金费 冻屏在加载时刻）
+      // 每次刷新重新拉取市场上下文（双 dex；否则 mark/OI/资金费 冻屏在加载时刻）
       try{
+        const m={};
         const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
-        const m={}; meta.universe.forEach((u,i)=>m[u.name]=ctxs[i]);
+        meta.universe.forEach((u,i)=>m[u.name]=ctxs[i]);
+        try{
+          const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
+          m2.universe.forEach((u,i)=>m[u.name]=c2[i]);
+        }catch(e){}
         coins.forEach(c=>{ if(m[c.name]) c.ctx=m[c.name]; });
       }catch(e){}
     }
@@ -237,7 +266,7 @@ async function refresh(){
       rl.push(...bucketize(netL,mark,'L'));
       rs.push(...bucketize(netS,mark,'S'));
     }
-    if(omit>0) $('netMeta').textContent+=` · 逐地址视图每侧仅显示名义最大的100条，共省略 ${omit} 条`;
+    if(omit>0) $('netProg').textContent=`逐地址视图每侧仅显示名义最大的100条，共省略 ${omit} 条`;
 
     // 估算层显隐：默认自动（有真实数据时隐藏），用户手动切换后尊重选择
     const hasReal=(rl.length+rs.length)>0;
@@ -246,7 +275,7 @@ async function refresh(){
     $('estHint').style.display=(estManual===null&&!showEst)?'inline':'none';
 
     L.sort((a,b)=>b.px-a.px); S.sort((a,b)=>b.px-a.px);
-    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>b.px-a.px);
+    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>a.px-b.px);
     const maxOf=a=>{let m=1;for(const x of a) if(x.v>m) m=x.v; return m;};
     const maxN=Math.max(maxOf(L),maxOf(S),maxOf(rl),maxOf(rs)); // 不用展开运算符传参：万级数组会栈溢出（Safari阈值远低于Chrome）
     const mk=arr=>arr.map(x=>({...x,w:Math.max(1.5,100*x.v/maxN)})); // 线性刻度：长度与名义金额成正比
@@ -283,9 +312,7 @@ async function loadWatchlist(){
   $('wlProg').textContent='0 / '+addrs.length;
   await pool(addrs,8,async a=>{
     try{
-      const st=await info({type:'clearinghouseState',user:a});
-      const eq=parseFloat(st.marginSummary.accountValue);
-      const ps=parsePositions(st);
+      const {eq,ps}=await fetchAccount(a);
       out.push({addr:a,eq,ps});
       for(const p of ps) wlAll.push({coin:p.coin,side:p.side,liqPx:p.liqPx,n:p.n,tag:a.slice(0,6)+'…'+(p.levType==='cross'?'跨':'逐')+p.lev+'x'});
     }catch(e){ out.push({addr:a,err:e.message}); }
@@ -308,31 +335,37 @@ async function loadNet(){
     if(!r.ok) throw new Error('HTTP '+r.status);
     idx=await r.json();
   }catch(e){
-    showErr('地址索引尚未建立（data/accounts.json 不存在）——等每日收割跑几天后这里才有料');
+    showErr('地址索引尚未建立（data/accounts.json 不存在）——等收割跑几天后这里才有料');
     return;
   }
   const poolAddrs=Object.keys(idx.accounts||{}).filter(a=>(idx.accounts[a].v||0)>=8000);
-  $('netMeta').textContent=`索引更新于 ${idx.updated||'未知'} · 候选池 ${poolAddrs.length} 个地址（快照账户值≥$8k）`;
+  const st=idx.stats||{};
+  const statTxt=st.queried?` · 上次收割成功率 ${((st.ok/st.queried)*100).toFixed(1)}%（${st.queried}查/${st.failed}败）`:'';
+  $('netMeta').textContent=`索引更新于 ${idx.updated||'未知'} · 候选池 ${poolAddrs.length} 个地址（快照账户值≥$8k）${statTxt}`;
   if(!poolAddrs.length){ $('netTable').innerHTML='<div class="prog">候选池为空，等首次收割（每6小时自动跑：北京 09:40/15:40/21:40/03:40）。</div>'; return; }
   if(netFetching){ $('netProg').textContent='正在拉取中，请等当前批次完成再点'; return; }
   netFetching=true; $('netBtn').textContent='拉取中…';
   const fetchCoin=cur.name; // 表格口径锁定为拉取时的币种（防中途切币导致口径漂移）
+  const t0=Date.now();
   try{
     wlAll=wlAll.filter(p=>!p.net);
     const rows=[]; let done=0;
-  $('netProg').textContent='0 / '+poolAddrs.length;
-  await pool(poolAddrs,8,async a=>{
-    try{
-      const st=await info({type:'clearinghouseState',user:a});
-      const eq=parseFloat(st.marginSummary.accountValue);
-      if(eq>=10000){ // 实时账户值门槛
-        const ps=parsePositions(st);
-        for(const p of ps) wlAll.push({coin:p.coin,side:p.side,liqPx:p.liqPx,n:p.n,net:1,tag:'全网·'+a.slice(0,6)});
-        rows.push({a,eq,ps:ps.filter(p=>p.coin===fetchCoin)}); // 只留拉取时币种的仓位进表格数据，全量仓位只进图表行，省内存
+    $('netProg').textContent='0 / '+poolAddrs.length;
+    await pool(poolAddrs,NET_CONCURRENCY,async a=>{
+      try{
+        const {eq,ps}=await fetchAccount(a);
+        if(eq>=10000){ // 实时账户值门槛（主 dex 账户总值口径）
+          for(const p of ps) wlAll.push({coin:p.coin,side:p.side,liqPx:p.liqPx,n:p.n,net:1,tag:'全网·'+a.slice(0,6)});
+          rows.push({a,eq,ps:ps.filter(p=>p.coin===fetchCoin)}); // 只留拉取时币种的仓位进表格数据，全量仓位只进图表行，省内存
+        }
+      }catch(e){}
+      done++;
+      const el=(Date.now()-t0)/1000;
+      if(done%25===0||done===poolAddrs.length){
+        const rate=done/Math.max(el,0.1), remain=Math.max(0,Math.round((poolAddrs.length-done)/rate));
+        $('netProg').textContent=`${done} / ${poolAddrs.length} · ${rate.toFixed(1)}地址/秒 · 约剩 ${remain}s`;
       }
-    }catch(e){}
-    $('netProg').textContent=(++done)+' / '+poolAddrs.length;
-  });
+    });
     renderNetTable(rows, fetchCoin);
     try{ localStorage.setItem('liqmap_net_cache', JSON.stringify({ts:Date.now(), coin:fetchCoin, wl:wlAll.filter(p=>p.net), tbl:rows})); }catch(e){}
   } finally {
@@ -366,15 +399,17 @@ $('netBtn').onclick=loadNet;
 $('wl').value=localStorage.getItem('liqmap_watchlist')||'';
 
 // 快照恢复：白屏/刷新/被系统回收标签页后，重开网页自动恢复上次拉取结果（6小时内有效）
+// 恢复成功后自动进入后台静默刷新——用户秒看旧数据，新数据到位后无声替换
 (function restoreNetCache(){
   try{
     const c=JSON.parse(localStorage.getItem('liqmap_net_cache')||'null');
     if(!c||!c.ts||!c.wl||Date.now()-c.ts>6*3600*1000) return;
     for(const r of c.wl) wlAll.push({coin:r.coin,side:r.side,liqPx:r.liqPx,n:r.n,net:1,tag:r.tag});
     const t=new Date(c.ts);
-    $('netMeta').textContent=`已恢复 ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')} 的拉取快照（${c.coin}·${c.wl.length}条真实行）· 点按钮重新拉取`;
-    $('netProg').textContent='快照已恢复';
+    $('netMeta').textContent=`已恢复 ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')} 的拉取快照（${c.coin}·${c.wl.length}条真实行）· 后台更新中`;
+    $('netProg').textContent='快照已恢复，后台静默更新中…';
     renderNetTable(c.tbl||[], c.coin);
+    setTimeout(()=>{ loadNet(); }, 1500); // 后台刷新（netFetching 防护重入）
   }catch(e){}
 })();
 
