@@ -48,6 +48,8 @@ VOL_MIN = 10_000_000        # 币种日成交门槛（美元名义）
 POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
 RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址复查
 CONCURRENCY = 10
+SNAP_CONCURRENCY = 16      # 快照模式并发（服务端 ~22请求/秒 平台期，16 起收益递减）
+SNAP_LIMIT = int(os.environ.get('HARVEST_SNAPSHOT_LIMIT', '0'))  # 冒烟测试用：>0 只拉前 N 个地址
 TODAY = time.strftime('%Y-%m-%d', time.gmtime())
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
@@ -208,5 +210,90 @@ def seg_note(hstats):
     return f'采集{hstats["segments"]}段/断线{hstats["segment_fails"]}次'
 
 
+def _positions_of(st):
+    """clearinghouseState → 紧凑仓位元组 [coin, side, szi, entryPx, liqPx, notional, lev, levType]"""
+    out = []
+    for p in st.get('assetPositions', []):
+        pos = p['position']
+        szi = float(pos['szi'])
+        lev = pos.get('leverage', {}) or {}
+        out.append([pos['coin'],
+                    'S' if szi < 0 else 'L',
+                    abs(szi),
+                    float(pos['entryPx']),
+                    float(pos['liquidationPx']),
+                    abs(float(pos['positionValue'])),
+                    lev.get('value'),
+                    lev.get('type')])
+    return out
+
+
+def snapshot_mode():
+    """方案B：对候选池全量双 dex 拉取，写 data/snapshot.json（页面打开秒渲染用）。
+
+    - 账户值门槛用主 dex 的 accountValue（= 账户总值，含 xyz 子账户，实测口径）
+    - 仓位 = 主 dex + xyz builder dex 合并
+    - 只保留快照时刻 ≥$10k 的账户（页面按时间戳标注新鲜度；要实时值用页面"拉取实时"按钮）
+    """
+    acc_path = os.path.join(DATA_DIR, 'accounts.json')
+    if not os.path.exists(acc_path):
+        print('[snapshot] accounts.json 不存在，跳过（等首次收割）', flush=True)
+        return
+    with open(acc_path) as f:
+        accounts = json.load(f).get('accounts', {})
+    pool = [a for a, rec in accounts.items() if rec.get('v', 0) >= POOL_MIN]
+    if SNAP_LIMIT:
+        pool = pool[:SNAP_LIMIT]
+    print(f'[snapshot] 候选池 {len(pool)} 个地址，双dex全量拉取，并发 {SNAP_CONCURRENCY}', flush=True)
+
+    prog = {'n': 0}
+
+    def work(a):
+        try:
+            st = info({'type': 'clearinghouseState', 'user': a})
+            eq = float(st.get('marginSummary', {}).get('accountValue', 0))
+            if eq < 10000:
+                return None
+            pos = _positions_of(st)
+            try:
+                sx = info({'type': 'clearinghouseState', 'user': a, 'dex': 'xyz'})
+                pos.extend(_positions_of(sx))
+            except Exception:
+                pass  # xyz 拉挂不丢主 dex 数据
+            return {'a': a, 'e': round(eq, 2), 'p': pos}
+        except Exception:
+            return None
+        finally:
+            prog['n'] += 1
+            if prog['n'] % 200 == 0:
+                print(f'[snapshot] {prog["n"]}/{len(pool)}', flush=True)
+
+    out = []
+    t0 = time.time()
+    if pool:
+        with ThreadPoolExecutor(max_workers=SNAP_CONCURRENCY) as ex:
+            for r in ex.map(work, pool):
+                if r:
+                    out.append(r)
+
+    snap = {
+        'ts': time.strftime('%Y-%m-%dT%H:%M:%S+08:00', time.gmtime(time.time() + 8 * 3600)),
+        'generated_at_unix': int(time.time()),
+        'pool_scanned': len(pool),
+        'pool_min': POOL_MIN,
+        'accounts': out,
+    }
+    snap_path = os.path.join(DATA_DIR, 'snapshot.json')
+    with open(snap_path, 'w') as f:
+        json.dump(snap, f, separators=(',', ':'))  # 紧凑格式省体积
+    size = os.path.getsize(snap_path)
+    print(f'[snapshot] 完成：快照≥$10k 账户 {len(out)} 个 · 文件 {size // 1024}KB · '
+          f'耗时 {round(time.time() - t0)}s', flush=True)
+
+
 if __name__ == '__main__':
-    main()
+    import sys
+    if '--snapshot' in sys.argv:
+        snapshot_mode()
+    else:
+        main()

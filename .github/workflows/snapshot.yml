@@ -1,0 +1,33 @@
+name: snapshot
+
+on:
+  schedule:
+    # 每30分钟：UTC :13/:43 = 北京时间 09:13/09:43/15:13/15:43/21:13/21:43/03:13/03:43
+    # 分钟数错开整点高峰（GitHub 定时在 :00-:15 排队最严重，有前车之鉴）
+    - cron: '13,43 * * * *'
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build snapshot (full pool, dual-dex)
+        run: python3 harvest.py --snapshot
+
+      - name: Push snapshot to orphan branch (force, no history growth)
+        run: |
+          test -f data/snapshot.json || { echo "snapshot.json 未生成，跳过提交"; exit 1; }
+          git checkout --orphan snap
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          rm -rf .github index.html harvest.py README.md
+          rm -f data/addresses.json data/accounts.json
+          git add data/snapshot.json
+          git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" commit -m "snapshot $(date -u +%Y-%m-%dT%H:%M) UTC"
+          git push -f origin snap

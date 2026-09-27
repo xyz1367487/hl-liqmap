@@ -118,7 +118,7 @@
       <span class="prog" id="netProg"></span>
       <span class="prog" id="netMeta"></span>
     </div>
-    <div class="prog" style="margin-top:6px">真实行默认按"离现价距离"分桶（0-0.5% / 0.5-1% / 1-2% / 2-3% / 3-5% / 5-10% / 10-20% / 20%+），行数=桶数，地址再多也不刷屏；中途可切币种。拉取结果自动存本机快照（6小时内有效）——白屏、刷新、标签页被系统回收后，重开网页自动恢复并后台静默更新，秒看不用重拉。</div>
+    <div class="prog" style="margin-top:6px">真实行默认按"离现价距离"分桶（0-0.5% / 0.5-1% / 1-2% / 2-3% / 3-5% / 5-10% / 10-20% / 20%+），行数=桶数，地址再多也不刷屏；中途可切币种。<b>打开页面自动读仓库快照</b>（每30分钟自动生成，秒开；新鲜度=快照生成时间，页面上有标注），本机同时保留最近一次拉取缓存兜底——白屏、刷新、标签页被系统回收后重开都能秒看。要实时值随时点"拉取全网真实仓位"（全量约2分钟，进度条带速率和预计剩余时间）。</div>
     <div id="netTable"></div>
   </div>
 
@@ -127,6 +127,7 @@
     · <b>估算层</b>（半透明横条，<b>%OI</b> = 占该币未平仓量比例）：未平仓名义(OI×标记价) × 杠杆分布假设[3x:10% / 5x:20% / 10x:30% / 20x:20% / 25x:10% / 40x:7% / 50x:3%，超币种最大杠杆档位自动剔除] × 多空比例滑块假设；强平价按简化公式 现价×(1∓1/杠杆)，未计维持保证金分档、手续费与全仓权益。<b>假设驱动的相对强度参考，不是真实持仓分布，也不是精确金额</b>。<br>
     · <b>真实层</b>（实心横条，美元名义）：链上 clearinghouseState 原值，liquidationPx 已按账户实际的 cross/isolated 与保证金计算。**双 dex 覆盖**：每个地址拉两次——主 dex（账户总值+加密永续仓）与 xyz dex（股票/商品永续仓，如 xyz:TSLA）；账户值 $10k 门槛按主 dex 的账户总值判定。全网模式默认按距离分桶聚合（桶标签如"1-2%·47仓"= 该距离带内 47 个仓位共 $X）；勾选"逐地址显示"可展开（每侧最多 100 条，其余省略数在汇总行注明）。<br>
     · <b>全网模式的边界</b>：Hyperliquid 没有"按余额枚举所有账户"的公开端点，索引由每6小时 WS 成交流（主 dex + xyz 双 dex）地址收割自然生长（预计4-7天趋于饱和），因此"全网"= 已发现地址的全网；$10k 门槛按拉取时实时账户值判定。<br>
+    · <b>快照模式（默认）</b>：页面打开时读取收割端每30分钟生成的全池快照（约1.7MB），秒渲染；真实层新鲜度 = 快照生成时间（netMeta 行有标注，停滞超2小时会警告），浮动盈亏按当前标记价现算。点"拉取全网真实仓位"可随时切回全量实时拉取。<br>
     · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。币种范围：日成交 &gt; $10M（与信号监控列表同源）。
   </div>
 </div>
@@ -227,7 +228,7 @@ async function refresh(){
       const sel=$('coin');
       sel.innerHTML=coins.map(c=>`<option>${c.name}</option>`).join('');
       if(coins.some(c=>c.name==='BTC')) sel.value='BTC';
-      sel.onchange=()=>refresh();
+      sel.onchange=async()=>{ await refresh(); if(snapRows&&!netFetching) renderNetTable(snapRows, cur.name, false); }; // 快照模式切币：图表和表格都跟着走
     }else{
       // 每次刷新重新拉取市场上下文（双 dex；否则 mark/OI/资金费 冻屏在加载时刻）
       try{
@@ -275,7 +276,7 @@ async function refresh(){
     $('estHint').style.display=(estManual===null&&!showEst)?'inline':'none';
 
     L.sort((a,b)=>b.px-a.px); S.sort((a,b)=>b.px-a.px);
-    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>a.px-b.px);
+    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>b.px-a.px); // 两区都价格降序：从上往下越来越低，现价分隔线居中原点
     const maxOf=a=>{let m=1;for(const x of a) if(x.v>m) m=x.v; return m;};
     const maxN=Math.max(maxOf(L),maxOf(S),maxOf(rl),maxOf(rs)); // 不用展开运算符传参：万级数组会栈溢出（Safari阈值远低于Chrome）
     const mk=arr=>arr.map(x=>({...x,w:Math.max(1.5,100*x.v/maxN)})); // 线性刻度：长度与名义金额成正比
@@ -345,6 +346,7 @@ async function loadNet(){
   if(!poolAddrs.length){ $('netTable').innerHTML='<div class="prog">候选池为空，等首次收割（每6小时自动跑：北京 09:40/15:40/21:40/03:40）。</div>'; return; }
   if(netFetching){ $('netProg').textContent='正在拉取中，请等当前批次完成再点'; return; }
   netFetching=true; $('netBtn').textContent='拉取中…';
+  snapRows=null; // 进入实时模式后，切币不再用快照表格（实时数据只含拉取时币种）
   const fetchCoin=cur.name; // 表格口径锁定为拉取时的币种（防中途切币导致口径漂移）
   const t0=Date.now();
   try{
@@ -374,8 +376,8 @@ async function loadNet(){
   refresh();
 }
 
-// 渲染全网模式汇总+表格（拉取完成与快照恢复共用；coin=口径币种）
-function renderNetTable(rows, coin){
+// 渲染全网模式汇总+表格（拉取完成与快照恢复共用；coin=口径币种；live=false 时标注为快照口径）
+function renderNetTable(rows, coin, live=true){
   const curRows=rows.filter(o=>o.ps.some(p=>p.coin===coin)).sort((a,b)=>b.eq-a.eq);
   const longN=curRows.reduce((s,o)=>s+o.ps.filter(p=>p.coin===coin&&p.side==='L').reduce((t,p)=>t+p.n,0),0);
   const shortN=curRows.reduce((s,o)=>s+o.ps.filter(p=>p.coin===coin&&p.side==='S').reduce((t,p)=>t+p.n,0),0);
@@ -386,7 +388,7 @@ function renderNetTable(rows, coin){
     const ps=o.ps.filter(p=>p.coin===coin).map(p=>`<div>${p.side==='L'?'多':'空'} ${p.szi} @${fmtPx(p.entryPx)} · ${p.levType==='cross'?'跨':'逐'}${p.lev}x · 强平 <b style="color:${p.side==='L'?'var(--green)':'var(--red)'}">$${fmtPx(p.liqPx)}</b> · 名义 $${fmtUSD(p.n)}</div>`).join('');
     return `<tr><td style="white-space:nowrap">${o.a.slice(0,8)}…${o.a.slice(-4)}</td><td class="num">$${fmtUSD(o.eq)}</td><td>${ps}</td></tr>`;
   }).join('');
-  $('netTable').innerHTML=`<div class="prog" style="margin:8px 0">实时账户值≥$10k：<b style="color:var(--fg)">${rows.length}</b> 个 · 其中持有 ${coin}：<b style="color:var(--fg)">${curRows.length}</b> 个 · 该币全网真实名义：多 <b style="color:var(--green)">$${fmtUSD(longN)}</b> / 空 <b style="color:var(--red)">$${fmtUSD(shortN)}</b> · 图中可定位（强平价有效）：多 <b style="color:var(--green)">$${fmtUSD(chartL)}</b> / 空 <b style="color:var(--red)">$${fmtUSD(chartS)}</b>（仅已发现地址口径；全仓深权益仓位强平价接口返回0，无法上图）${curRows.length>50?'<br>表格仅显示前50个账户':''}</div>`+(trs?`<table><tr><th>地址</th><th style="text-align:right">账户值</th><th>${coin} 仓位</th></tr>${trs}</table>`:'');
+  $('netTable').innerHTML=`<div class="prog" style="margin:8px 0">${live?'实时账户值':'快照时'}≥$10k：<b style="color:var(--fg)">${rows.length}</b> 个 · 其中持有 ${coin}：<b style="color:var(--fg)">${curRows.length}</b> 个 · 该币全网真实名义：多 <b style="color:var(--green)">$${fmtUSD(longN)}</b> / 空 <b style="color:var(--red)">$${fmtUSD(shortN)}</b> · 图中可定位（强平价有效）：多 <b style="color:var(--green)">$${fmtUSD(chartL)}</b> / 空 <b style="color:var(--red)">$${fmtUSD(chartS)}</b>（仅已发现地址口径；全仓深权益仓位强平价接口返回0，无法上图）${curRows.length>50?'<br>表格仅显示前50个账户':''}</div>`+(trs?`<table><tr><th>地址</th><th style="text-align:right">账户值</th><th>${coin} 仓位</th></tr>${trs}</table>`:'');
 }
 
 $('ls').oninput=()=>{ $('lsLabel').textContent=$('ls').value+'/'+(100-$('ls').value); refresh(); };
@@ -398,22 +400,66 @@ $('wlClear').onclick=()=>{ $('wl').value=''; wlAll=wlAll.filter(p=>!p.net); loca
 $('netBtn').onclick=loadNet;
 $('wl').value=localStorage.getItem('liqmap_watchlist')||'';
 
-// 快照恢复：白屏/刷新/被系统回收标签页后，重开网页自动恢复上次拉取结果（6小时内有效）
-// 恢复成功后自动进入后台静默刷新——用户秒看旧数据，新数据到位后无声替换
-(function restoreNetCache(){
+// ===== 方案B：仓库快照优先 =====
+// 打开页面读一个文件秒渲染（snapshot.yml 每30分钟生成，≤30分钟新鲜度）；
+// 快照不可用时退回本机缓存（恢复后后台静默刷新）；两者均无才需要点按钮。
+let snapRows=null; // 快照全量行（切币可重渲染表格；进入实时模式后清空）
+const SNAPSHOT_URL='https://raw.githubusercontent.com/xyz1367487/hl-liqmap/snap/data/snapshot.json';
+
+async function loadSnapshot(){
+  try{
+    const r=await fetch(SNAPSHOT_URL+'?_='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const snap=await r.json();
+    if(!snap||!snap.accounts||!snap.accounts.length) throw new Error('空快照');
+    return snap;
+  }catch(e){ return null; }
+}
+
+function snapshotToRows(snap, mark){
+  // 紧凑元组 [coin,side,szi,entryPx,liqPx,notional,lev,levType] → 页面内部结构；浮盈按当前标记价现算
+  return (snap.accounts||[]).map(acc=>({
+    a:acc.a, eq:acc.e,
+    ps:(acc.p||[]).map(t=>({coin:t[0],side:t[1],szi:t[2],entryPx:t[3],liqPx:t[4],n:t[5],lev:t[6],levType:t[7],
+                             upnl:(t[1]==='L'?1:-1)*(mark-t[3])*t[2]}))
+  }));
+}
+
+function applySnapshot(snap){
+  wlAll=wlAll.filter(p=>!p.net);
+  const mark=parseFloat(cur.ctx.markPx);
+  snapRows=snapshotToRows(snap, mark);
+  for(const o of snapRows) for(const p of o.ps) wlAll.push({coin:p.coin,side:p.side,liqPx:p.liqPx,n:p.n,net:1,tag:'全网·'+o.a.slice(0,6)});
+  renderNetTable(snapRows, cur.name, false); // live=false：汇总行标"快照时"
+  const t=new Date(snap.ts);
+  const ageMin=Math.round((Date.now()-(snap.generated_at_unix||Date.now()/1000)*1000)/60000);
+  const stale=ageMin>120?' · ⚠️快照已停滞（任务异常？），建议点按钮拉实时':'';
+  $('netMeta').textContent=`仓位快照生成于 ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}（${ageMin}分钟前·每30分钟自动刷新）· 扫描候选池 ${snap.pool_scanned} 个 · 快照≥$10k ${snap.accounts.length} 个${stale}`;
+  $('netProg').textContent='快照模式';
+}
+
+// 本机缓存恢复（快照不可用时的退路；恢复后后台静默刷新）
+function restoreNetCache(){
   try{
     const c=JSON.parse(localStorage.getItem('liqmap_net_cache')||'null');
-    if(!c||!c.ts||!c.wl||Date.now()-c.ts>6*3600*1000) return;
+    if(!c||!c.ts||!c.wl||Date.now()-c.ts>6*3600*1000) return false;
     for(const r of c.wl) wlAll.push({coin:r.coin,side:r.side,liqPx:r.liqPx,n:r.n,net:1,tag:r.tag});
     const t=new Date(c.ts);
-    $('netMeta').textContent=`已恢复 ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')} 的拉取快照（${c.coin}·${c.wl.length}条真实行）· 后台更新中`;
-    $('netProg').textContent='快照已恢复，后台静默更新中…';
+    $('netMeta').textContent=`已恢复 ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')} 的本机拉取缓存（${c.wl.length}条真实行）· 仓库快照不可用，后台更新中`;
+    $('netProg').textContent='本机缓存恢复，后台静默更新中…';
     renderNetTable(c.tbl||[], c.coin);
-    setTimeout(()=>{ loadNet(); }, 1500); // 后台刷新（netFetching 防护重入）
-  }catch(e){}
-})();
+    return true;
+  }catch(e){ return false; }
+}
 
-(async()=>{ await refresh(); setInterval(()=>{ if($('auto').checked && !netFetching) refresh(); },10000); })();
+(async()=>{
+  await refresh();
+  const snap=await loadSnapshot();
+  if(snap){ applySnapshot(snap); refresh(); }
+  else if(restoreNetCache()){ refresh(); setTimeout(()=>{ loadNet(); }, 1500); } // 后台刷新（netFetching 防护重入）
+  else { $('netMeta').textContent='仓库快照与本机缓存均不可用 · 点"拉取全网真实仓位"按钮拉取实时数据'; }
+  setInterval(()=>{ if($('auto').checked && !netFetching) refresh(); },10000);
+})();
 </script>
 </body>
 </html>
