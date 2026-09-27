@@ -434,7 +434,9 @@ function applySnapshot(snap){
   const t=new Date(snap.ts);
   const ageMin=Math.round((Date.now()-(snap.generated_at_unix||Date.now()/1000)*1000)/60000);
   const stale=ageMin>120?' · ⚠️快照已停滞（任务异常？），建议点按钮拉实时':'';
-  $('netMeta').textContent=`仓位快照生成于 ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}（${ageMin}分钟前·每30分钟自动刷新）· 扫描候选池 ${snap.pool_scanned} 个 · 快照≥$10k ${snap.accounts.length} 个${stale}`;
+  const st=snap.stats||{};
+  const failWarn=(st.failed>0&&snap.pool_scanned>0&&st.failed>snap.pool_scanned*0.05)?` · ⚠️本次快照失败率 ${Math.round(st.failed/snap.pool_scanned*100)}%（疑似限流），账户数可能偏低`:'';
+  $('netMeta').textContent=`仓位快照生成于 ${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}（${ageMin}分钟前·每30分钟自动刷新）· 扫描候选池 ${snap.pool_scanned} 个 · 快照≥$10k ${snap.accounts.length} 个${stale}${failWarn}`;
   $('netProg').textContent='快照模式';
 }
 

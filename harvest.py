@@ -48,7 +48,7 @@ VOL_MIN = 10_000_000        # 币种日成交门槛（美元名义）
 POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
 RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址复查
 CONCURRENCY = 10
-SNAP_CONCURRENCY = 16      # 快照模式并发（服务端 ~22请求/秒 平台期，16 起收益递减）
+SNAP_CONCURRENCY = 6       # 快照模式并发：实测 16 并发(≈67请求/秒)会被 HL 软限流（响应缺字段被误判为低净值），6 并发约 25 请求/秒安全
 SNAP_LIMIT = int(os.environ.get('HARVEST_SNAPSHOT_LIMIT', '0'))  # 冒烟测试用：>0 只拉前 N 个地址
 TODAY = time.strftime('%Y-%m-%d', time.gmtime())
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
@@ -247,21 +247,29 @@ def snapshot_mode():
     print(f'[snapshot] 候选池 {len(pool)} 个地址，双dex全量拉取，并发 {SNAP_CONCURRENCY}', flush=True)
 
     prog = {'n': 0}
+    cnt = {'ok': 0, 'below': 0, 'fail': 0}
 
     def work(a):
         try:
             st = info({'type': 'clearinghouseState', 'user': a})
+            if 'marginSummary' not in st:
+                # HL 软限流时可能返回缺字段的 200 响应——必须当失败重试，不能当"余额不足"静默丢弃
+                raise ValueError('响应缺少 marginSummary（疑似限流/软失败）')
             eq = float(st.get('marginSummary', {}).get('accountValue', 0))
             if eq < 10000:
+                cnt['below'] += 1
                 return None
             pos = _positions_of(st)
             try:
                 sx = info({'type': 'clearinghouseState', 'user': a, 'dex': 'xyz'})
-                pos.extend(_positions_of(sx))
+                if 'assetPositions' in sx:
+                    pos.extend(_positions_of(sx))
             except Exception:
                 pass  # xyz 拉挂不丢主 dex 数据
+            cnt['ok'] += 1
             return {'a': a, 'e': round(eq, 2), 'p': pos}
         except Exception:
+            cnt['fail'] += 1
             return None
         finally:
             prog['n'] += 1
@@ -281,14 +289,17 @@ def snapshot_mode():
         'generated_at_unix': int(time.time()),
         'pool_scanned': len(pool),
         'pool_min': POOL_MIN,
+        'stats': {'ok': cnt['ok'], 'below': cnt['below'], 'failed': cnt['fail']},
         'accounts': out,
     }
     snap_path = os.path.join(DATA_DIR, 'snapshot.json')
     with open(snap_path, 'w') as f:
         json.dump(snap, f, separators=(',', ':'))  # 紧凑格式省体积
     size = os.path.getsize(snap_path)
-    print(f'[snapshot] 完成：快照≥$10k 账户 {len(out)} 个 · 文件 {size // 1024}KB · '
-          f'耗时 {round(time.time() - t0)}s', flush=True)
+    print(f'[snapshot] 完成：≥$10k 账户 {len(out)} 个（ok {cnt["ok"]} / 低于门槛 {cnt["below"]} / '
+          f'失败 {cnt["fail"]}）· 文件 {size // 1024}KB · 耗时 {round(time.time() - t0)}s', flush=True)
+    if cnt['fail'] > len(pool) * 0.05:
+        print(f'[snapshot] ⚠️ 失败率 {cnt["fail"]/len(pool)*100:.0f}% 偏高，疑似被限流，下次考虑再降并发', flush=True)
 
 
 if __name__ == '__main__':
