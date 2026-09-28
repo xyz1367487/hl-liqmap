@@ -128,7 +128,7 @@
     · <b>真实层</b>（实心横条，美元名义）：链上 clearinghouseState 原值，liquidationPx 已按账户实际的 cross/isolated 与保证金计算。**双 dex 覆盖**：每个地址拉两次——主 dex（账户总值+加密永续仓）与 xyz dex（股票/商品永续仓，如 xyz:TSLA）；账户值 $10k 门槛按主 dex 的账户总值判定。全网模式默认按距离分桶聚合（桶标签如"1-2%·47仓"= 该距离带内 47 个仓位共 $X）；勾选"逐地址显示"可展开（每侧最多 100 条，其余省略数在汇总行注明）。<br>
     · <b>全网模式的边界</b>：Hyperliquid 没有"按余额枚举所有账户"的公开端点，索引由每6小时 WS 成交流（主 dex + xyz 双 dex）地址收割自然生长（预计4-7天趋于饱和），因此"全网"= 已发现地址的全网；$10k 门槛按拉取时实时账户值判定。<br>
     · <b>快照模式（默认）</b>：页面打开时读取收割端每30分钟生成的全池快照（约1.7MB），秒渲染；真实层新鲜度 = 快照生成时间（netMeta 行有标注，停滞超2小时会警告），浮动盈亏按当前标记价现算。点"拉取全网真实仓位"可随时切回全量实时拉取。<br>
-    · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。币种范围：日成交 &gt; $10M（与信号监控列表同源）。
+    · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。币种范围：日成交 &gt; $5M（主片区与 xyz 片区同门槛）。
   </div>
 </div>
 
@@ -182,7 +182,7 @@ async function loadCoins(){
     const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
     all=all.concat(m2.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:c2[i]})));
   }catch(e){}
-  return all.filter(c=>parseFloat(c.ctx.dayNtlVlm)>1e7)
+  return all.filter(c=>parseFloat(c.ctx.dayNtlVlm)>5e6) // 门槛$5M：主片区与xyz片区同标准（2026-09-28用户拍板，原$10M对xyz股票永续过严）
     .sort((a,b)=>parseFloat(b.ctx.dayNtlVlm)-parseFloat(a.ctx.dayNtlVlm));
 }
 

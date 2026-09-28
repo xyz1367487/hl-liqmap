@@ -17,7 +17,7 @@
 """hl-liqmap 地址收割器（Phase 2）
 
 每6小时运行一次（北京 09:40/15:40/21:40/03:40，UTC 40 1,7,13,19）：
-1. 拉取日成交 > $10M 的币种列表（主 dex + xyz builder dex 双 dex，与页面同源）；
+1. 拉取日成交 > $5M 的币种列表（主 dex + xyz builder dex 双 dex，同门槛；与页面同源）；
 2. 分段订阅 WS 成交流（默认 5×60s，段间重连、断线自动续采，连续失败5次才放弃），
    收割 users 字段里的地址——xyz-only 交易者因此也能进索引；
 3. 合并进 data/addresses.json（记录 first_seen）；
@@ -45,7 +45,7 @@ WS_URL = 'wss://api.hyperliquid.xyz/ws'
 CAPTURE_SECONDS = int(os.environ.get('HARVEST_SECONDS', '300'))
 SEGMENT_SECONDS = int(os.environ.get('HARVEST_SEGMENT', '60'))  # 单段时长，段间重连
 MAX_SEG_FAILS = 5                                              # 连续段失败上限，超过则带着已有地址收工
-VOL_MIN = 10_000_000        # 币种日成交门槛（美元名义）
+VOL_MIN = 5_000_000         # 币种日成交门槛（美元名义；主片区与xyz片区同标准$5M，2026-09-28用户拍板，原$10M）
 POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
 RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址复查
 CONCURRENCY = 10
@@ -73,7 +73,7 @@ def info(payload, retries=2):
 
 
 def load_coins():
-    """主 dex + xyz builder dex 双 dex，返回日成交>$10M 的币种全名列表"""
+    """主 dex + xyz builder dex 双 dex，返回日成交>$5M 的币种全名列表"""
     coins = []
     for dex in (None, 'xyz'):
         payload = {'type': 'metaAndAssetCtxs'}
