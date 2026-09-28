@@ -203,7 +203,7 @@ def get_equity(addr):
 def main():
     t_start = time.time()
     coins = load_coins()
-    print(f'[coins] {len(coins)} coins with dayNtlVlm > ${VOL_MIN:,}（主+xyz双dex）', flush=True)
+    print(f'[coins] {len(coins)} coins（avg_7d 名单，主+xyz双dex）', flush=True)
     harvested, hstats = asyncio.run(harvest(coins))
 
     addr_path = os.path.join(DATA_DIR, 'addresses.json')
