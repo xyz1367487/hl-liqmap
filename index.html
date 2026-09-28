@@ -74,7 +74,7 @@
 <body>
 <div class="wrap">
   <h1>HL 清算地图<span class="badge">浏览器直连 · 无后端</span></h1>
-  <div class="sub">Hyperliquid 公开 API · 主 dex + xyz 股票永续双 dex · 估算层(假设驱动) + 真实层(watchlist / 全网索引) · <span id="status">加载中…</span></div>
+  <div class="sub">Hyperliquid 公开 API · 主 dex + xyz 双 dex · 币种口径：<span id="coinCaliber">avg_7d > $5M</span> · 估算层(假设驱动) + 真实层(watchlist / 全网索引) · <span id="status">加载中…</span></div>
   <div class="err" id="err"></div>
 
   <div class="card">
@@ -128,7 +128,7 @@
     · <b>真实层</b>（实心横条，美元名义）：链上 clearinghouseState 原值，liquidationPx 已按账户实际的 cross/isolated 与保证金计算。**双 dex 覆盖**：每个地址拉两次——主 dex（账户总值+加密永续仓）与 xyz dex（股票/商品永续仓，如 xyz:TSLA）；账户值 $10k 门槛按主 dex 的账户总值判定。全网模式默认按距离分桶聚合（桶标签如"1-2%·47仓"= 该距离带内 47 个仓位共 $X）；勾选"逐地址显示"可展开（每侧最多 100 条，其余省略数在汇总行注明）。<br>
     · <b>全网模式的边界</b>：Hyperliquid 没有"按余额枚举所有账户"的公开端点，索引由每6小时 WS 成交流（主 dex + xyz 双 dex）地址收割自然生长（预计4-7天趋于饱和），因此"全网"= 已发现地址的全网；$10k 门槛按拉取时实时账户值判定。<br>
     · <b>快照模式（默认）</b>：页面打开时读取收割端每30分钟生成的全池快照（约1.7MB），秒渲染；真实层新鲜度 = 快照生成时间（netMeta 行有标注，停滞超2小时会警告），浮动盈亏按当前标记价现算。点"拉取全网真实仓位"可随时切回全量实时拉取。<br>
-    · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。币种范围：日成交 &gt; $5M（主片区与 xyz 片区同门槛）。
+    · 公开成交流没有爆仓标记，本页不展示"已成交爆仓事件"，只展示强平价分布。币种范围：近 7 日日均成交额 &gt; $5M（avg_7d 口径，与 HL-UPERP-MONITOR 一致；名单由收割端每 6 小时计算写入 data/coins.json，页面顶部"币种口径"行显示当前生效口径）。
   </div>
 </div>
 
@@ -182,7 +182,22 @@ async function loadCoins(){
     const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
     all=all.concat(m2.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:c2[i]})));
   }catch(e){}
-  return all.filter(c=>parseFloat(c.ctx.dayNtlVlm)>5e6) // 门槛$5M：主片区与xyz片区同标准（2026-09-28用户拍板，原$10M对xyz股票永续过严）
+  // 优先用收割端算好的 avg_7d 名单（与 HL-UPERP-MONITOR 同口径，每6小时随收割更新），避免每次打开拉304根K线
+  try{
+    const r=await fetch('data/coins.json?_='+Date.now());
+    if(r.ok){
+      const cj=await r.json();
+      if(cj&&cj.coins&&cj.coins.length){
+        const names=new Set(cj.coins.map(c=>c.n));
+        window.__coinListInfo=`avg_7d 口径 · 更新于 ${cj.updated||'?'} · ${cj.coins.length} 币`;
+        return all.filter(c=>names.has(c.name))
+          .sort((a,b)=>parseFloat(b.ctx.dayNtlVlm)-parseFloat(a.ctx.dayNtlVlm));
+      }
+    }
+  }catch(e){}
+  // 兜底：coins.json 不可用（首次部署/收割未跑）时退回单日成交>$5M
+  window.__coinListInfo='单日口径（兜底，coins.json 未就绪）';
+  return all.filter(c=>parseFloat(c.ctx.dayNtlVlm)>5e6) // 兜底门槛$5M；正式口径为收割端 avg_7d（见 data/coins.json）
     .sort((a,b)=>parseFloat(b.ctx.dayNtlVlm)-parseFloat(a.ctx.dayNtlVlm));
 }
 
@@ -229,6 +244,7 @@ async function refresh(){
       sel.innerHTML=coins.map(c=>`<option>${c.name}</option>`).join('');
       if(coins.some(c=>c.name==='BTC')) sel.value='BTC';
       sel.onchange=async()=>{ await refresh(); if(snapRows&&!netFetching) renderNetTable(snapRows, cur.name, false); }; // 快照模式切币：图表和表格都跟着走
+      $('coinCaliber').textContent=window.__coinListInfo||'avg_7d > $5M';
     }else{
       // 每次刷新重新拉取市场上下文（双 dex；否则 mark/OI/资金费 冻屏在加载时刻）
       try{

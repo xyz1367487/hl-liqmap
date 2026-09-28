@@ -17,7 +17,7 @@
 """hl-liqmap 地址收割器（Phase 2）
 
 每6小时运行一次（北京 09:40/15:40/21:40/03:40，UTC 40 1,7,13,19）：
-1. 拉取日成交 > $5M 的币种列表（主 dex + xyz builder dex 双 dex，同门槛；与页面同源）；
+1. 拉取近 7 日日均成交额 > $5M 的币种列表（avg_7d 口径，与 HL-UPERP-MONITOR 一致；主 dex + xyz 双 dex；结果写 data/coins.json 供页面读取）；
 2. 分段订阅 WS 成交流（默认 5×60s，段间重连、断线自动续采，连续失败5次才放弃），
    收割 users 字段里的地址——xyz-only 交易者因此也能进索引；
 3. 合并进 data/addresses.json（记录 first_seen）；
@@ -72,20 +72,82 @@ def info(payload, retries=2):
             time.sleep(1.5)
 
 
+def _get_volume_metrics(coin_name):
+    """近7日日均成交额（avg_7d，估算USD）——与 HL-UPERP-MONITOR._get_volume_metrics 同口径。
+
+    日K线 v 是成交数量(base)，×收盘价≈当日成交额(USD)；去掉今天未完成的K线，
+    取最近7根完整日K的均值。死币返回 0，API失败返回 None（调用方不得当0缓存，防误杀）。
+    """
+    now_ms = int(time.time() * 1000)
+    try:
+        candles = info({
+            'type': 'candleSnapshot',
+            'req': {'coin': coin_name, 'interval': '1d',
+                    'startTime': now_ms - 10 * 86400 * 1000, 'endTime': now_ms},
+        })
+        if not candles or len(candles) < 2:
+            return 0
+        complete = [c for c in candles if c['t'] < (now_ms - 86400000)]
+        if len(complete) < 2:
+            return 0
+        recent = complete[-7:]
+        return sum(float(c['v']) * float(c['c']) for c in recent) / len(recent)
+    except Exception:
+        return None
+
+
 def load_coins():
-    """主 dex + xyz builder dex 双 dex，返回日成交>$5M 的币种全名列表"""
+    """主 dex + xyz builder dex 双 dex，返回近7日日均成交额 > $5M 的币种全名列表。
+
+    avg_7d 口径与 HL-UPERP-MONITOR 完全一致（2026-09-28 对齐）：日K线去掉今天未完成的，
+    取最近7根完整日K的 v×c（base量×收盘价）均值。用 data/volume_cache.json 跨次缓存
+    （同日直接命中，candleSnapshot 权重20/次、IP限60次/分，全量304币约7分钟，日级缓存后趋近零成本）。
+    同时把名单写入 data/coins.json 供页面读取（页面不再自己算，避免每次打开拉304根K线）。
+    """
+    cache_path = os.path.join(DATA_DIR, 'volume_cache.json')
+    cache = {}
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path) as f:
+                cache = json.load(f)
+        except Exception:
+            cache = {}
+    today = time.strftime('%Y-%m-%d', time.gmtime())
+    same_day = cache.get('date') == today
+    pairs_cache = cache.get('pairs', {}) if same_day else {}
+
     coins = []
+    coin_avg = {}
+    api_calls = 0
     for dex in (None, 'xyz'):
         payload = {'type': 'metaAndAssetCtxs'}
         if dex:
             payload['dex'] = dex
         meta, ctxs = info(payload)
-        for i, u in enumerate(meta['universe']):
-            try:
-                if float(ctxs[i]['dayNtlVlm']) > VOL_MIN:
-                    coins.append(u['name'])
-            except Exception:
-                pass
+        for u in meta['universe']:
+            name = u['name']
+            if name in pairs_cache:
+                avg7 = pairs_cache[name]
+            else:
+                avg7 = _get_volume_metrics(name)
+                api_calls += 1
+                if avg7 is not None:
+                    pairs_cache[name] = avg7
+                time.sleep(0.5)  # candleSnapshot 权重20/次，IP限60次/分——pacing 防 429 风暴（仅未命中缓存时）
+            if avg7 is not None and avg7 > VOL_MIN:
+                coins.append(name)
+                coin_avg[name] = round(avg7)
+
+    try:
+        with open(cache_path, 'w') as f:
+            json.dump({'date': today, 'pairs': pairs_cache}, f)
+        with open(os.path.join(DATA_DIR, 'coins.json'), 'w') as f:
+            json.dump({'updated': today, 'caliber': 'avg_7d', 'threshold': VOL_MIN,
+                       'coins': [{'n': n, 'v': coin_avg[n]} for n in coins]}, f)
+    except Exception:
+        pass
+    print(f'[coins] avg_7d>${VOL_MIN:,}: {len(coins)} 个（主+xyz双dex；本次 candle 查询 {api_calls} 次'
+          f'{"，缓存命中" if same_day else "，全量重算"}）', flush=True)
     return coins
 
 
