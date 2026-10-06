@@ -329,11 +329,24 @@ def _positions_of(st):
     return out
 
 
+def _load_monitored_coins():
+    """读 data/coins.json 的监控币名单（收割端每6小时写入；含 xyz: 前缀股票，与快照仓位币名同口径）。
+
+    快照生成时只保留名单内币种的仓位——页面下拉框只有这些币，名单外仓位页面永远不渲染，
+    纯占体积（实测 42699 仓位过滤到 22738，gzip 1008KB→567KB）。读取失败返回 None（不过滤，安全兜底）。
+    """
+    try:
+        with open(os.path.join(DATA_DIR, 'coins.json')) as f:
+            return {c['n'] for c in json.load(f).get('coins', [])}
+    except Exception:
+        return None
+
+
 def snapshot_mode():
     """方案B：对候选池全量双 dex 拉取，写 data/snapshot.json（页面打开秒渲染用）。
 
     - 账户值门槛用主 dex 的 accountValue（= 账户总值，含 xyz 子账户，实测口径）
-    - 仓位 = 主 dex + xyz builder dex 合并
+    - 仓位 = 主 dex + xyz builder dex 合并，且只保留监控名单内币种（coins.json 口径）
     - 只保留快照时刻 ≥$10k 的账户（页面按时间戳标注新鲜度；要实时值用页面"拉取实时"按钮）
     """
     acc_path = os.path.join(DATA_DIR, 'accounts.json')
@@ -345,7 +358,11 @@ def snapshot_mode():
     pool = [a for a, rec in accounts.items() if rec.get('v', 0) >= SNAP_MIN]  # 用 SNAP_MIN($10k)，避免白查 $8k~$10k 缓冲带
     if SNAP_LIMIT:
         pool = pool[:SNAP_LIMIT]
-    print(f'[snapshot] 候选池 {len(pool)} 个地址，双dex全量拉取，并发 {SNAP_CONCURRENCY}', flush=True)
+    allowed = _load_monitored_coins()
+    if allowed is None:
+        print('[snapshot] ⚠️ data/coins.json 不可读，本快照不过滤仓位（体积偏大）', flush=True)
+    print(f'[snapshot] 候选池 {len(pool)} 个地址，双dex全量拉取，并发 {SNAP_CONCURRENCY}'
+          f'{"" if allowed is None else f"，仓位过滤至监控名单 {len(allowed)} 币"}', flush=True)
 
     prog = {'n': 0}
     cnt = {'ok': 0, 'below': 0, 'fail': 0}
@@ -358,6 +375,7 @@ def snapshot_mode():
         """每 worker 一条长连接跑完自己的地址块——urllib 每请求新建连接会被 HL 掐（实测52%失败）"""
         box = {'conn': _new_conn()}
         res = []
+        pstat = [0, 0]  # [过滤前仓位数, 过滤后保留数]
 
         def post(payload):
             c = box['conn']
@@ -396,6 +414,10 @@ def snapshot_mode():
                             pos.extend(_positions_of(sx))
                     except Exception:
                         reconnect()  # xyz 拉挂不丢主 dex 数据，但要换条干净连接
+                    if allowed:
+                        pstat[0] += len(pos)
+                        pos = [t for t in pos if t[0] in allowed]
+                        pstat[1] += len(pos)
                     rec = ('ok', {'a': a, 'e': round(eq, 2), 'p': pos})
                     break
                 except Exception:
@@ -413,14 +435,17 @@ def snapshot_mode():
             box['conn'].close()
         except Exception:
             pass
-        return res
+        return res, pstat[0], pstat[1]
 
     out = []
+    pos_total = pos_kept = 0
     t0 = time.time()
     if pool:
         chunks = [pool[i::SNAP_CONCURRENCY] for i in range(SNAP_CONCURRENCY)]
         with ThreadPoolExecutor(max_workers=SNAP_CONCURRENCY) as ex:
-            for res in ex.map(worker, chunks):
+            for res, pt, pk in ex.map(worker, chunks):
+                pos_total += pt
+                pos_kept += pk
                 for tag, rec in res:
                     cnt[tag] += 1
                     if rec:
@@ -431,15 +456,17 @@ def snapshot_mode():
         'generated_at_unix': int(time.time()),
         'pool_scanned': len(pool),
         'pool_min': POOL_MIN,
-        'stats': {'ok': cnt['ok'], 'below': cnt['below'], 'failed': cnt['fail']},
+        'stats': {'ok': cnt['ok'], 'below': cnt['below'], 'failed': cnt['fail'],
+                  'pos_total': pos_total, 'pos_kept': pos_kept},
         'accounts': out,
     }
     snap_path = os.path.join(DATA_DIR, 'snapshot.json')
     with open(snap_path, 'w') as f:
         json.dump(snap, f, separators=(',', ':'))  # 紧凑格式省体积
     size = os.path.getsize(snap_path)
+    flt = f' · 仓位过滤 {pos_kept}/{pos_total} ({pos_kept * 100 // pos_total if pos_total else 100}%)' if allowed else ''
     print(f'[snapshot] 完成：≥$10k 账户 {len(out)} 个（ok {cnt["ok"]} / 低于门槛 {cnt["below"]} / '
-          f'失败 {cnt["fail"]}）· 文件 {size // 1024}KB · 耗时 {round(time.time() - t0)}s', flush=True)
+          f'失败 {cnt["fail"]}）{flt} · 文件 {size // 1024}KB · 耗时 {round(time.time() - t0)}s', flush=True)
     if bad['sample']:
         print(f'[snapshot] 异常响应样本: {bad["sample"]}', flush=True)
     if cnt['fail'] > len(pool) * 0.05:
