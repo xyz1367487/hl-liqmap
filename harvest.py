@@ -40,7 +40,6 @@ import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-import websockets
 
 API = 'https://api.hyperliquid.xyz/info'
 WS_URL = 'wss://api.hyperliquid.xyz/ws'
