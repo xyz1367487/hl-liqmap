@@ -20,8 +20,8 @@
 1. 拉取近 7 日日均成交额 > $5M 的币种列表（avg_7d 口径，与 HL-UPERP-MONITOR 一致；主 dex + xyz 双 dex；结果写 data/coins.json 供页面读取）；
 2. 分段订阅 WS 成交流（默认 5×60s，段间重连、断线自动续采，连续失败5次才放弃），
    收割 users 字段里的地址——xyz-only 交易者因此也能进索引；
-3. 合并进 data/addresses.json（记录 first_seen）；
-4. 对【新地址】+【候选池中 $8k~$12k 缓冲带的老地址】逐个查 clearinghouseState：
+3. 合并进 data/addresses.json（记录 fs=first_seen / ls=last_seen，兼容旧格式）；
+4. 对【新地址】+【候选池中 $8k~$12k 缓冲带的老地址】+【$12k 以上账户随机抽 10% 轮转复查】逐个查 clearinghouseState：
    - 账户值 >= $8k 进候选池 data/accounts.json（主 dex 的 accountValue = 账户总值，
      含 xyz 子账户，实测口径，无需双拉）；
    - 掉出 $8k 的从候选池移除（仍在 addresses 索引中）；
@@ -36,6 +36,8 @@ import time
 import http.client
 import urllib.request
 import asyncio
+import random
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import websockets
@@ -47,7 +49,10 @@ SEGMENT_SECONDS = int(os.environ.get('HARVEST_SEGMENT', '60'))  # 单段时长�
 MAX_SEG_FAILS = 5                                              # 连续段失败上限，超过则带着已有地址收工
 VOL_MIN = 5_000_000         # 币种日成交门槛（美元名义；主片区与xyz片区同标准$5M，2026-09-28用户拍板，原$10M）
 POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
-RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址复查
+RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址每次复查
+SNAP_MIN = 10_000           # 快照门槛：独立于候选池，避免每次快照白查 $8k~$10k 地址
+ROTATION_DAYS = 3           # 老账户轮转复查间隔（天）：>$12k 的账户从不进缓冲带，靠此机制淘汰缩水账户
+ROTATION_RATE = 0.10        # 每次从"超出缓冲带上限"的老账户里随机抽取比例
 CONCURRENCY = 10
 SNAP_CONCURRENCY = 6       # 快照模式并发：每 worker 一条长连接 + pacing，合计约 22 请求/秒（实测安全区）
 SNAP_PACE = float(os.environ.get('HARVEST_SNAP_PACE', '0.35'))  # 每地址间隔秒数
@@ -153,6 +158,7 @@ def load_coins():
 
 async def harvest(coins):
     """分段订阅 + 断线重连；返回 (地址set, 采集统计dict)"""
+    import websockets  # 延迟导入：snapshot 模式不需要 websockets，workflow 无需安装
     addrs = set()
     t0 = time.time()
     seg = 0
@@ -211,15 +217,36 @@ def main():
     addresses, accounts = {}, {}
     if os.path.exists(addr_path):
         with open(addr_path) as f:
-            addresses = json.load(f).get('addresses', {})
+            raw = json.load(f).get('addresses', {})
+        # 向前兼容：旧格式 {addr: date_str}，新格式 {addr: {fs, ls}}
+        for a, v in raw.items():
+            addresses[a] = v if isinstance(v, dict) else {'fs': v, 'ls': v}
     if os.path.exists(acc_path):
         with open(acc_path) as f:
             accounts = json.load(f).get('accounts', {})
 
     new_addrs = [a for a in harvested if a not in addresses]
+
+    # 缓冲带复查：$8k~$12k 之间的账户每次都查
     recheck = [a for a, rec in accounts.items() if POOL_MIN <= rec.get('v', 0) < RECHECK_MAX]
-    todo = new_addrs + [a for a in recheck if a not in set(new_addrs)]
-    print(f'[merge] {len(new_addrs)} new addresses; {len(recheck)} buffer-band rechecks', flush=True)
+
+    # 轮转复查：$12k 以上的账户随机抽 10%（防止长期不查、候选池积累缩水账户）
+    cutoff = time.strftime('%Y-%m-%d', time.gmtime(time.time() - ROTATION_DAYS * 86400))
+    rotation_pool = [a for a, rec in accounts.items()
+                     if rec.get('v', 0) >= RECHECK_MAX and rec.get('t', '') <= cutoff]
+    rotation_sample = random.sample(rotation_pool, max(0, int(len(rotation_pool) * ROTATION_RATE)))
+
+    todo_set = set(new_addrs)
+    todo = new_addrs[:]
+    for a in recheck:
+        if a not in todo_set:
+            todo.append(a); todo_set.add(a)
+    for a in rotation_sample:
+        if a not in todo_set:
+            todo.append(a); todo_set.add(a)
+
+    print(f'[merge] {len(new_addrs)} new / {len(recheck)} buffer-band / '
+          f'{len(rotation_sample)} rotation (eligible {len(rotation_pool)})', flush=True)
     print(f'[equity] checking {len(todo)} addresses, concurrency {CONCURRENCY}', flush=True)
 
     prog = {'n': 0}
@@ -243,7 +270,10 @@ def main():
     ok = sum(1 for v in results.values() if v is not None)
     failed = len(results) - ok
     for a in new_addrs:
-        addresses[a] = TODAY
+        addresses[a] = {'fs': TODAY, 'ls': TODAY}
+    for a in harvested:
+        if a in addresses and isinstance(addresses[a], dict):
+            addresses[a]['ls'] = TODAY
     for a, v in results.items():
         if v is not None and v >= POOL_MIN:
             accounts[a] = {'v': round(v, 2), 't': TODAY}
@@ -313,7 +343,7 @@ def snapshot_mode():
         return
     with open(acc_path) as f:
         accounts = json.load(f).get('accounts', {})
-    pool = [a for a, rec in accounts.items() if rec.get('v', 0) >= POOL_MIN]
+    pool = [a for a, rec in accounts.items() if rec.get('v', 0) >= SNAP_MIN]  # 用 SNAP_MIN($10k)，避免白查 $8k~$10k 缓冲带
     if SNAP_LIMIT:
         pool = pool[:SNAP_LIMIT]
     print(f'[snapshot] 候选池 {len(pool)} 个地址，双dex全量拉取，并发 {SNAP_CONCURRENCY}', flush=True)

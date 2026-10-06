@@ -18,8 +18,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install deps
-        run: pip install websockets
+      # snapshot_mode() 只用标准库 http.client，无需额外依赖
 
       - name: Build snapshot (full pool, dual-dex)
         run: python3 harvest.py --snapshot

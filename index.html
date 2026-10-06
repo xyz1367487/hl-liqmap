@@ -323,7 +323,7 @@ function parsePositions(st){
 async function loadWatchlist(){
   const addrs=[...new Set($('wl').value.split(/[\s,;]+/).map(s=>s.trim()).filter(a=>/^0x[a-fA-F0-9]{40}$/.test(a)))];
   localStorage.setItem('liqmap_watchlist',$('wl').value);
-  wlAll=wlAll.filter(p=>!p.net);
+  wlAll=wlAll.filter(p=>p.net);  // 清掉旧 wl 条目，保留 net 条目，防多次点击累加
   if(!addrs.length){ $('wlTable').innerHTML=''; refresh(); return; }
   const out=[]; let done=0;
   $('wlProg').textContent='0 / '+addrs.length;
@@ -412,7 +412,7 @@ $('refresh').onclick=()=>refresh();
 $('estToggle').onchange=()=>{ estManual=$('estToggle').checked; refresh(); };
 $('netAddrToggle').onchange=()=>{ netPerAddr=$('netAddrToggle').checked; refresh(); };
 $('wlBtn').onclick=loadWatchlist;
-$('wlClear').onclick=()=>{ $('wl').value=''; wlAll=wlAll.filter(p=>!p.net); localStorage.removeItem('liqmap_watchlist'); $('wlTable').innerHTML=''; refresh(); };
+$('wlClear').onclick=()=>{ $('wl').value=''; wlAll=wlAll.filter(p=>p.net); localStorage.removeItem('liqmap_watchlist'); $('wlTable').innerHTML=''; refresh(); };
 $('netBtn').onclick=loadNet;
 $('wl').value=localStorage.getItem('liqmap_watchlist')||'';
 
