@@ -89,7 +89,7 @@
     <div class="legend">
       <span><span class="sw est-l"></span>估算·假设驱动（%OI，非真实持仓）</span>
       <span><span class="sw real-l"></span>真实·链上原值（美元名义）</span>
-      <span>横条长度 ∝ 名义金额（线性刻度）</span>
+      <span>横条长度 ∝ √名义金额（平方根刻度，防远端巨桶压扁近端行）</span>
       <span id="estHint" style="color:var(--amber);display:none">真实数据已就位，估算层已自动隐藏——勾选上方"显示估算层"可作对照</span>
     </div>
     <div class="sec s">空头强平区（现价上方）<span class="mark">价格从上往下递减</span></div>
@@ -118,7 +118,7 @@
       <span class="prog" id="netProg"></span>
       <span class="prog" id="netMeta"></span>
     </div>
-    <div class="prog" style="margin-top:6px">真实行默认按"离现价距离"分桶（0-0.5% / 0.5-1% / 1-2% / 2-3% / 3-5% / 5-10% / 10-20% / 20%+），行数=桶数，地址再多也不刷屏；中途可切币种。<b>打开页面自动读仓库快照</b>（每30分钟自动生成，秒开；新鲜度=快照生成时间，页面上有标注），本机同时保留最近一次拉取缓存兜底——白屏、刷新、标签页被系统回收后重开都能秒看。要实时值随时点"拉取全网真实仓位"（全量约2分钟，进度条带速率和预计剩余时间）。</div>
+    <div class="prog" style="margin-top:6px">真实行默认按"离现价距离"分桶（0-0.25% / 0.25-0.5% / 0.5-1% / 1-1.5% / 1.5-2% / 2-3% / 3-5% / 5-7.5% / 7.5-10% / 10-15% / 15-20% / 20-30% / 30-50% / 50%+，共14档），空桶自动跳过，地址再多也不刷屏；中途可切币种。<b>打开页面自动读仓库快照</b>（每30分钟自动生成，秒开；新鲜度=快照生成时间，页面上有标注），本机同时保留最近一次拉取缓存兜底——白屏、刷新、标签页被系统回收后重开都能秒看。要实时值随时点"拉取全网真实仓位"（全量约2分钟，进度条带速率和预计剩余时间）。</div>
     <div id="netTable"></div>
   </div>
 
@@ -135,7 +135,7 @@
 <script>
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
-const BANDS=[[0,.005,'0-0.5%'],[.005,.01,'0.5-1%'],[.01,.02,'1-2%'],[.02,.03,'2-3%'],[.03,.05,'3-5%'],[.05,.10,'5-10%'],[.10,.20,'10-20%'],[.20,Infinity,'20%+']];
+const BANDS=[[0,.0025,'0-0.25%'],[.0025,.005,'0.25-0.5%'],[.005,.01,'0.5-1%'],[.01,.015,'1-1.5%'],[.015,.02,'1.5-2%'],[.02,.03,'2-3%'],[.03,.05,'3-5%'],[.05,.075,'5-7.5%'],[.075,.10,'7.5-10%'],[.10,.15,'10-15%'],[.15,.20,'15-20%'],[.20,.30,'20-30%'],[.30,.50,'30-50%'],[.50,Infinity,'50%+']];
 const NET_CONCURRENCY=16; // 实测：HL服务端16并发附近到吞吐平台期(~22地址/秒)，8→16近乎翻倍
 let coins=[], cur=null, wlAll=[], estManual=null, netPerAddr=false, netFetching=false;
 
@@ -295,7 +295,7 @@ async function refresh(){
     rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>b.px-a.px); // 两区都价格降序：从上往下越来越低，现价分隔线居中原点
     const maxOf=a=>{let m=1;for(const x of a) if(x.v>m) m=x.v; return m;};
     const maxN=Math.max(maxOf(L),maxOf(S),maxOf(rl),maxOf(rs)); // 不用展开运算符传参：万级数组会栈溢出（Safari阈值远低于Chrome）
-    const mk=arr=>arr.map(x=>({...x,w:Math.max(1.5,100*x.v/maxN)})); // 线性刻度：长度与名义金额成正比
+    const mk=arr=>arr.map(x=>({...x,w:Math.max(1.5,100*Math.sqrt(x.v/maxN))})); // 平方根刻度：长度∝√名义金额，防远端巨桶把近端压成牙签（金额比30:1→视觉比≈5.5:1）
     const allL=[...(showEst?mk(L):[]),...mk(rl)], allS=[...(showEst?mk(S):[]),...mk(rs)];
     $('longs').innerHTML=allL.length?allL.map(x=>barRow(x.px,x,x.tag,x.real?'real-l':'est-l')).join(''):'<div class="prog">无数据</div>';
     $('shorts').innerHTML=allS.length?allS.map(x=>barRow(x.px,x,x.tag,x.real?'real-s':'est-s')).join(''):'<div class="prog">无数据</div>';
