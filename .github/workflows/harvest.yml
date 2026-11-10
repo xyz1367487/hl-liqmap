@@ -1,31 +1,13 @@
-name: harvest
+name: harvest (migration guard)
 
 on:
-  schedule:
-    - cron: '40 1,7,13,19 * * *'   # 每6小时：UTC 01:40/07:40/13:40/19:40（北京时间 09:40/15:40/21:40/03:40，避开整点高峰）
-  workflow_dispatch:        # 支持手动触发
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  harvest:
+  migration-notice:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install deps
-        run: pip install websockets
-
-      - name: Harvest addresses
-        run: python harvest.py
-
-      - name: Commit data back
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/
-          git diff --staged --quiet || git commit -m "chore: harvest $(date -u +%Y-%m-%d)"
-          git push
+      - run: echo 'Collection moved to the private repository. See MIGRATION.md.'

@@ -1,0 +1,61 @@
+# Install this as .github/workflows/collect.yml ONLY in the PRIVATE repository.
+name: Private collection and aggregate export
+on:
+  push:
+    branches: [main]
+    paths: ['initialize-private.sh', '.github/workflows/collect.yml']
+  schedule:
+    - cron: '40 1,7,13,19 * * *'
+    - cron: '13,43 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [snapshot, harvest]
+        default: snapshot
+permissions:
+  contents: write
+concurrency:
+  group: private-state
+  cancel-in-progress: false
+jobs:
+  collect:
+    if: github.event.repository.private == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PRIVATE_DATA_DIR: ${{ github.workspace }}/state
+      ENABLE_PUBLIC_EXPORT: ${{ secrets.PUBLIC_AGGREGATE_SSH_KEY != '' || secrets.PUBLIC_AGGREGATE_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install harvest dependency
+        run: pip install websockets==15.0.1
+      - name: Harvest (existing sampling rules)
+        if: github.event_name == 'push' || github.event.schedule == '40 1,7,13,19 * * *' || inputs.mode == 'harvest'
+        run: python -B harvest.py
+      - name: Snapshot (existing filters and pacing)
+        if: github.event_name == 'push' || (github.event.schedule != '40 1,7,13,19 * * *' && inputs.mode != 'harvest')
+        run: python -B harvest.py --snapshot
+      - name: Export and archive snapshot
+        id: export
+        if: github.event_name == 'push' || (github.event.schedule != '40 1,7,13,19 * * *' && inputs.mode != 'harvest')
+        run: python -B private_export.py
+      - name: Commit private state and immutable archives
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -- state/
+          if test -d snapshots; then git add -- snapshots/; fi
+          git diff --cached --quiet || git commit -m 'Private collection generation'
+          git push origin HEAD:main
+      - name: Publish ONLY validated aggregate (when secret exists)
+        if: steps.export.outcome == 'success' && env.ENABLE_PUBLIC_EXPORT == 'true'
+        env:
+          PUBLIC_AGGREGATE_SSH_KEY: ${{ secrets.PUBLIC_AGGREGATE_SSH_KEY }}
+          PUBLIC_AGGREGATE_TOKEN: ${{ secrets.PUBLIC_AGGREGATE_TOKEN }}
+        run: python -B publish_aggregate.py '${{ steps.export.outputs.aggregate_path }}'

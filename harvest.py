@@ -57,7 +57,17 @@ SNAP_CONCURRENCY = 6       # 快照模式并发：每 worker 一条长连接 + p
 SNAP_PACE = float(os.environ.get('HARVEST_SNAP_PACE', '0.35'))  # 每地址间隔秒数
 SNAP_LIMIT = int(os.environ.get('HARVEST_SNAPSHOT_LIMIT', '0'))  # 冒烟测试用：>0 只拉前 N 个地址
 TODAY = time.strftime('%Y-%m-%d', time.gmtime())
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+DATA_DIR = os.environ.get('PRIVATE_DATA_DIR')
+
+
+def require_private_data_dir():
+    global DATA_DIR
+    if not DATA_DIR:
+        raise RuntimeError('Set PRIVATE_DATA_DIR to a private data directory; public checkout data is forbidden')
+    DATA_DIR = os.path.abspath(DATA_DIR)
+    if DATA_DIR == os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'):
+        raise RuntimeError('Use a separate private data directory')
+    os.makedirs(DATA_DIR, exist_ok=True)
 
 
 def info(payload, retries=2):
@@ -400,8 +410,7 @@ def snapshot_mode():
                 try:
                     st = post({'type': 'clearinghouseState', 'user': a})
                     if 'marginSummary' not in st:
-                        if not bad['sample']:
-                            bad['sample'] = str(st)[:200]
+                        bad['sample'] = 'missing marginSummary'
                         raise ValueError('响应缺 marginSummary（软失败）')
                     eq = float(st['marginSummary']['accountValue'])
                     if eq < 10000:
@@ -475,6 +484,7 @@ def snapshot_mode():
 
 if __name__ == '__main__':
     import sys
+    require_private_data_dir()
     if '--snapshot' in sys.argv:
         snapshot_mode()
     else:
