@@ -1,53 +1,35 @@
 # HL 清算地图（hl-liqmap）
 
-纯静态单文件网页 + GitHub Actions 每6小时地址收割。浏览器直连 Hyperliquid 公开 API，无后端、无构建、无依赖。
+静态前端 + 私有采集 + 公开聚合快照。阶段状态更新于北京时间 2026-11-11（UTC+08:00）：私有采集、快照、导出和 state 回写已核实成功；旧公开任务已改为 guard，不再定时写入。单仓库 deploy key 自动发布 aggregate 的通道已实现，真实 SSH 发布结果仍待主线程核验。public index 尚未切换，不能据此称全流程上线成功。旧公开 main 的 data/、snap 快照和 Git 历史仍公开，未清理、未重写。
 
-## 许可证
-
-本项目基于 [GNU Affero 通用公共许可证 v3.0 (AGPL-3.0)](LICENSE) 发布。
-© 2026 xyz1367487。你可以自由使用、研究和修改本项目；但若你将修改后的版本作为网络服务向他人提供，必须以相同许可证公开你的完整源码。
-
-线上地址：**https://xyz1367487.github.io/hl-liqmap/**
+下文描述迁移候选前端：浏览器直连 Hyperliquid 公开行情 API，展示估算层、本机 Watchlist 及聚合真实层。候选页面只读取公开聚合，不自动读取地址池或逐账户快照，不增加登录功能；此行为尚不能代表线上 public index。
 
 ## 架构
 
-```
-index.html                    页面（估算层 + watchlist 真实层 + 全网真实模式）
-harvest.py                    地址收割器（每6小时）+ 快照生成器（--snapshot 模式，每30分钟）
-.github/workflows/harvest.yml 每6小时自动运行（北京时间 09:40/15:40/21:40/03:40）+ 手动触发
-.github/workflows/snapshot.yml 每30分钟自动运行（北京时间每 :13/:43，错开整点高峰）+ 手动触发
-data/addresses.json           已发现地址索引（addr -> {fs: first_seen, ls: last_seen}）
-data/accounts.json            候选池（addr -> 快照账户值，≥$8k，页面按实时≥$10k 过滤）
-snap 分支 data/snapshot.json  全池双dex仓位快照（仅含监控名单币种仓位，gzip 约0.6MB；孤儿分支单提交强推，无 git 历史膨胀；页面打开秒读）
-```
+- `index.html`：实时行情、估算开关/多空滑块、币种切换、平方根条形、聚合快照及本机 Watchlist。
+- `harvest.py`：原采样规则的收割与逐账户快照，只在指定 PRIVATE_DATA_DIR 的私有侧运行。
+- `aggregate.py`：同原图14档距离分桶，公开全部非空桶，不设贡献账户数或金额筛桶门槛，严格白名单 schema。
+- `private_export.py`：保存私有原始快照与行情参考价，产生可审查的公开桶输出。
+- `publish_aggregate.py`：私有侧专用发布器，导出成功且发布凭据非空时自动追加写公开 aggregate 分支的 data/aggregate.json，无强推，不要求额外 repository 变量。
+- `deploy/private-collect.yml`：私有工作流模板，仅 private=true 运行；每6小时收割、每30分钟快照并导出。发布在 SSH key 或 token 任一非空且导出成功时自动执行，凭据仅注入发布 step。
+- `.github/workflows/`：公开代码检查与迁移 guard，不检出私有数据。
 
-## 工作原理
+候选前端的真实桶绑定导出时固定参考价 reference_mark；行情每10秒刷新，聚合每30分钟获取，不随最新行情精确重分真实桶。相同输入与参考价下，金额、仓位数、价格极值算法与原图一致；汇总包括全部可定位非空桶，单人贡献桶也公开，无法定位强平价的仓位不计入地图汇总。公开格式不含逐账户明细，但单人贡献、价格极值、链上关联和跨期差分仍可能推断个别账户，不承诺绝对匿名。
 
-**页面（打开即看，全部浏览器端完成）：**
-- **估算层**（半透明横条，`%OI`）：OI×标记价 × 杠杆分布假设 × 多空比例假设，简化强平公式现算。假设驱动的相对强度参考，非真实持仓。有真实数据时默认自动隐藏（可勾选“显示估算层”作对照）。
-- **Watchlist 真实层**（实心横条，美元名义）：手动粘贴 0x 地址 → 链上 `clearinghouseState` 原值，`liquidationPx` 接口直接返回。名单只存本机浏览器 localStorage。
-- **全网真实模式**：**默认走仓库快照（方案B）**——页面打开自动读 `snap` 分支的 `data/snapshot.json`（snapshot.yml 每 30 分钟对候选池全量双 dex 拉取生成，仅保留监控名单币种的仓位——名单外仓位页面不渲染，过滤后 gzip 约 0.6MB；快照下载与币种列表加载并行），秒渲染全部币种的图表/汇总/表格；新鲜度 = 快照生成时间（netMeta 行标注，停滞超 2 小时警告），浮动盈亏按当前标记价现算。**"拉取全网实时"按钮**保留：随时全量实时拉取（并发 16，每地址双 dex，失败重试 ×2，进度条带速率与 ETA）。真实行按**离现价距离分桶聚合**（0-0.25% / 0.25-0.5% / 0.5-1% / 1-1.5% / 1.5-2% / 2-3% / 3-5% / 5-7.5% / 7.5-10% / 10-15% / 15-20% / 20-30% / 30-50% / 50%+，共 14 档，空桶跳过）；横条长度按**平方根刻度**（∝√名义金额，防远端巨桶压扁近端行）；勾选"逐地址显示"可展开（每侧最多 100 条）。快照只扫候选池中账户值 ≥$10k 的地址（`SNAP_MIN`，与收割候选池门槛 `POOL_MIN=$8k` 解耦，不白查缓冲带）。快照不可用（首次部署/任务故障）时退回本机 localStorage 缓存（6 小时内）并后台静默刷新；均不可用才需手动点按钮。
+自动发布使用只挂目标公开仓库的 deploy key；这是仓库级读写权限，固定 aggregate 分支及唯一 data/aggregate.json 由发布器约束，并非 GitHub 分支级 key。私钥仅存私有库 Actions secret，私有 state 回写使用私有库自带 GITHUB_TOKEN。不要把地址池、逐账户快照、日志、token 或 key 正文提交到公开仓库；本地采集须指定私有 PRIVATE_DATA_DIR，不沿用旧公开 data 回写方式。
 
-**索引器（后台，每6小时一次）：**
-1. 拉取近 7 日日均成交额 > $5M 的币种（**avg_7d 口径，与 HL-UPERP-MONITOR 一致**；主 dex + xyz 双 dex；`data/volume_cache.json` 日级缓存，结果写 `data/coins.json` 供页面读取；xyz-only 交易者也能进索引）；
-2. WS 订阅这些币种的成交流，**分段采集 300 秒**（默认 5×60s，段间重连、断线自动续采，连续失败 5 次才带着已有地址收工），收割 `users` 字段地址；
-3. 新地址 + 候选池中 $8k~$12k 缓冲带老地址 + $12k 以上账户随机抽 10%（rotation，每 3 天轮转覆盖一遍），逐个查 `clearinghouseState` 账户值（主 dex 的 accountValue = 账户总值，含 xyz 子账户）；
-4. ≥$8k 进候选池，**收割统计**（queried/ok/failed/fail_rate/segments/run_seconds 等）写入 `data/accounts.json` 的 `stats` 字段，页面“全网真实模式”顶部显示上次收割成功率；
-5. 结果提交回仓库。
+## 验证
 
-**诚实边界**：HL 没有"按余额枚举账户"的公开端点，索引只覆盖"采集开始后活跃过的地址"——"全网"= 已发现地址的全网。索引随时间饱和（实测约 15 个新地址/秒/10 币种）。
-
-## 本地开发
-
-```bash
-# 冒烟测试（25 秒采集）
-HARVEST_SECONDS=25 python3 harvest.py
-# 快照模式冒烟（只拉前 60 个地址）
-HARVEST_SNAPSHOT_LIMIT=60 python3 harvest.py --snapshot
+```sh
+python3 -B -m unittest discover -s tests -v
+python3 -B aggregate.py --validate path/to/aggregate.json
+python3 -B tests/browser_harness.py --aggregate path/to/aggregate.json
 ```
 
-## 运维
+浏览器验证器只暴露前端和校验过的聚合，拒绝访问 data/；行情与 Watchlist 为确定性合成响应，不能当作交易行情。
 
-- 仓库需开启 **Settings → Actions → General → Workflow permissions → Read and write contents**（索引器回写 data/）
-- 手动触发收割：仓库 Actions → harvest → Run workflow
-- public 仓库 Actions 不限免费额度
+详见 [迁移指南](MIGRATION.md) 的字段契约、业务规则、隐私边界、私有初始化、生产切换与逐项待批准操作，以及 [验证记录](VERIFICATION.md)。.gitignore 不移除已有跟踪数据，本次仍保留旧 data/ 文件和所有历史。
+
+## 许可证
+
+[GNU Affero General Public License v3.0](LICENSE)，© 2026 xyz1367487。
