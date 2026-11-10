@@ -84,3 +84,12 @@ python3 -B aggregate.py --validate exports/<generation>/aggregate.json
 现有 coins.json 与 volume_cache.json 当前未检出地址，可保留；没有请求删除它们。历史重写、删分支、删 Actions 日志/运行记录、清理缓存或本机文件不在本次授权内；本次不拟执行这些操作。若另行要做，必须先按实时展开的路径/运行ID清单确认；历史重写和外部缓存清除无法保证完整恢复或撤回。
 
 .gitignore 不会让已跟踪数据消失。本分支原 data/ 文件保持原样，不 stage，不运行 git add .。任何公开新提交前，检查 staged blob 的地址模式与私有字段，并核对 changed paths 仅源码/测试/文档。不要从包含原历史的仓库直接推成所谓“干净新公开仓库”。
+
+
+## 2026-11-11 线上切换完成记录（北京时间）
+
+私有运行 42857496914 已成功完成收割、快照、归档、state 回写与 SSH 聚合发布；私有 state 提交为 75bd2c10f2c56528f5eb60b4c611a66d3ccf561a。公开 aggregate 初次提交 ffc46e6cb522540554f0ef9d1d3d6ba581d063a1 只有 data/aggregate.json；真实输出 87 市场、1108 桶，生成时间 00:55:32，严格 schema 通过，地址模式 0 处。上述数量为该次快照，不是固定值。
+
+公开前端已由 9bcfcf59d7434460f7525f493ffb8db3a9904de2 切换到聚合入口；源码 CI 42859744810、Pages 42859743580 均成功。线上浏览器已读取该新聚合时间，资源记录没有旧 accounts/addresses/snap 请求。两处残留三账户门槛说明已修正为全部非空桶公开；实际导出此前已经无该门槛。本条记录取代前文“前端尚未切换/SSH 发布待验证”的阶段状态。
+
+旧公开 main:data/addresses.json、main:data/accounts.json 和 snap:data/snapshot.json 仍保留，待用户确认具体移除操作；Git 历史未重写。这次切换停止未来公开采集地址，但不代表旧地址数据已经保密。公开聚合不提供绝对匿名保证。
