@@ -20,13 +20,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HL 清算地图</title>
+<title>HL 清算地图 · 潜在强平分布</title>
+<link rel="stylesheet" href="chart.css">
 <link rel="preconnect" href="https://api.hyperliquid.xyz">
 <style>
   :root{ --bg:#0d1117; --card:#161b22; --border:#2d333b; --fg:#e6edf3; --muted:#8b949e; --green:#3fb950; --red:#f85149; --blue:#58a6ff; --amber:#d29922; }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:14px}
-  .wrap{max-width:960px;margin:0 auto;padding:16px}
+  .wrap{max-width:1280px;margin:0 auto;padding:16px}
   h1{font-size:18px;margin:0}
   .sub{color:var(--muted);font-size:12px;margin-top:2px}
   .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-top:12px}
@@ -73,30 +74,34 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>HL 清算地图<span class="badge">浏览器直连 · 无后端</span></h1>
+  <h1>HL 清算地图<span class="badge">潜在强平分布</span></h1>
   <div class="sub">Hyperliquid 公开 API · 主 dex + xyz 双 dex · 币种口径：<span id="coinCaliber">avg_7d > $5M</span> · 估算层(假设驱动) + 真实层(本机 Watchlist / 公开聚合) · <span id="status">加载中…</span></div>
   <div class="err" id="err"></div>
 
   <div class="card">
     <div class="ctl">
       <select id="coin"></select>
-      <label class="chk"><input type="checkbox" id="estToggle" checked> 显示估算层</label>
+      <label class="chk"><input type="checkbox" id="estToggle"> 显示估算层</label>
       <label class="chk" title="仅作用于估算层的多空拆分假设"><input type="range" id="ls" min="20" max="80" value="50" style="width:100px"> 多空假设 <span id="lsLabel">50/50</span></label>
       <label class="chk"><input type="checkbox" id="auto" checked> 10秒自动刷新</label>
       <button id="refresh">手动刷新</button>
     </div>
     <div class="ctx" id="ctx" style="margin-top:10px"></div>
-    <div class="legend">
-      <span><span class="sw est-l"></span>估算·假设驱动（%OI，非真实持仓）</span>
-      <span><span class="sw real-l"></span>真实·链上原值（美元名义）</span>
-      <span>横条长度 ∝ √名义金额（平方根刻度，防远端巨桶压扁近端行）</span>
-      <span id="estHint" style="color:var(--amber);display:none">真实数据已就位，估算层已自动隐藏——勾选上方"显示估算层"可作对照</span>
+    <div class="chart-controls">
+      <label>数据源 <select id="source"><option value="aggregate">公开聚合</option><option value="watchlist">本机 Watchlist（独立）</option></select></label>
+      <label>价格窗口 <select id="span"><option value="0.02">±2%</option><option value="0.08" selected>±8%</option><option value="0.25">±25%</option><option value="0.5">±50%</option><option value="1">±100%</option></select></label>
+      <label>分辨率 <select id="resolution"><option value="1">5bp · 0.05%</option><option value="2">10bp · 0.1%</option><option value="5">25bp · 0.25%</option><option value="10">50bp · 0.5%</option></select></label>
+      <button id="zoomIn" aria-label="放大价格范围">＋ 放大</button><button id="zoomOut" aria-label="缩小价格范围">− 缩小</button><button id="resetView">重置范围</button>
+      <label>下限 $ <input id="priceMin" type="number" min="0" step="any" aria-label="价格下限"></label>
+      <label>上限 $ <input id="priceMax" type="number" min="0" step="any" aria-label="价格上限"></label><button id="applyRange">应用</button>
     </div>
-    <div class="sec s">空头强平区（现价上方）<span class="mark">价格从上往下递减</span></div>
-    <div id="shorts"></div>
-    <div class="markline" id="markLine">现价</div>
-    <div class="sec l">多头强平区（现价下方）<span class="mark">价格从上往下递减</span></div>
-    <div id="longs"></div>
+    <div class="chart-heading"><div><h2 id="chartTitle">潜在强平名义金额</h2><div id="chartSubtitle" class="prog"></div></div><div id="chartTotal"></div></div>
+    <div class="legend chart-legend"><span><i class="key long"></i>多头潜在强平</span><span><i class="key short"></i>空头潜在强平</span><span><i class="key line long"></i>累计多头 · 右轴</span><span><i class="key line short"></i>累计空头 · 右轴</span><span><i class="key current"></i>最新行情价</span><span><i class="key reference"></i>分桶参考价</span><span id="estLegend" hidden>虚线柱：假设估算 · 不计入累计</span></div>
+    <div id="freshness" role="status"></div>
+    <div id="chartFrame"><svg id="priceChart" viewBox="0 0 1120 520" role="img" aria-label="潜在强平名义金额价格分布与累计曲线"></svg><div id="chartTooltip" role="status" hidden></div></div>
+    <div id="chartNote" class="prog"></div>
+    <div id="viewSummary" class="prog"></div>
+    <div class="chart-help">价格横轴与两条美元纵轴均为线性。悬停、触摸或聚焦柱体查看区间；滚轮缩放，方向键切换柱体。缩放仅裁切视窗，累计始终从最新行情价向同侧远端累加。</div>
   </div>
 
   <div class="card">
@@ -117,25 +122,28 @@
       <span class="prog" id="netProg"></span>
       <span class="prog" id="netMeta"></span>
     </div>
-    <div class="prog" style="margin-top:6px">14 档距离分桶与原图相同，按快照参考价分桶，公开全部非空桶。行情每 10 秒更新，桶在下一次聚合快照前保持原参考价口径。汇总包含所有可定位桶，不按贡献账户数筛选。可以切换币种、估算层与多空假设。</div>
+    <div class="prog" style="margin-top:6px">固定参考价分桶，公开全部非空桶（含单人贡献桶）。行情每10秒更新，不重分真实桶；支持旧版14档与新版细价格网格平滑过渡。</div>
     <div id="netTable"></div>
   </div>
 
   <div class="foot">
-    <b>口径说明</b><br>
-    · 估算层：OI×标记价×杠杆分布假设×多空比例；强平价按现价×(1∓1/杠杆)，未计维持保证金分档、手续费与全仓权益。半透明条显示 %OI，属于假设参考。<br>
-    · 聚合真实层：私有侧从已发现账户候选池中，按快照账户总值 ≥ $10k、主 dex + xyz 双 dex 与 avg_7d > $5M 名单筛选。14 档距离为 0-0.25 / 0.25-0.5 / 0.5-1 / 1-1.5 / 1.5-2 / 2-3 / 3-5 / 5-7.5 / 7.5-10 / 10-15 / 15-20 / 20-30 / 30-50 / 50%+。每档左闭右开，实心条为桶美元名义，长度按平方根缩放，空桶跳过。多头使用桶内最高强平价，空头使用最低强平价，与原聚合图一致。<br>
-    · 桶绑定快照参考价，不随实时行情重新分桶；每30分钟生成快照，时间与参考价在页面标注，停滞超过2小时警告。无有效强平价的仓位不上图。采样仍为每6小时 WS 300秒分段收割，索引不是字面全网。<br>
-    · 隐私边界：公开聚合文件没有地址池或逐账户记录；全部非空桶均公开，不按贡献账户数筛选。单人贡献桶的金额、仓位数量和价格极值仍可能与公开链上信息、优势大户或跨期差分关联，不能保证绝对匿名。<br>
-    · Watchlist 是用户自行输入、本机保存并直连公开 API 的独立工具，不使用私有地址池。旧版逐账户缓存不会被本页读取。公开成交无爆仓标记，本页不展示已成交爆仓事件。
+    <b>口径与边界</b><br>
+    · 本图是仓位潜在强平名义分布，不是已爆仓事件；数据仅来自 Hyperliquid 主 dex 与 xyz，无多交易所推算。账户筛选和币种口径沿用原采集规则。<br>
+    · 新版固定网格为快照参考价的 0.05%，直接从私有原始仓位分桶，区间左闭右开；分辨率只合并已有细桶，不拆分。桶参考价不随实时行情变化。旧 schema1 的14档按原始价格极值区间完整显示，无法还原区间内分布。<br>
+    · 两条累计曲线只计真实层：多头从最新行情价向低价、空头向高价累加，到完整桶远端极值才计入金额。跨现价桶无法精确拆分，单列待定位金额；方向已越过现价的桶仍保留，不推断已成交或已爆仓。累计不随视窗重置。<br>
+    · Watchlist 地址仅保存在本机并直连公开 API；与公开聚合独立切换，避免重复计数。估算层为 OI × 杠杆权重 × 多空假设，以虚线美元柱表示，不计入真实累计。未计维持保证金分档、手续费和全仓权益。<br>
+    · 私有侧按账户总值 ≥ $10k、主 dex + xyz 与 avg_7d > $5M 名单筛选，每6小时收割、每30分钟快照；调度可能延迟，超过2小时提示过期。索引非字面全网，无有效强平价不上图。<br>
+    · 所有非空聚合桶（含单人贡献桶）公开，不增加贡献人数门槛。公开无地址和逐账户记录，但价格极值、金额和跨期变化可能被关联推断，不保证绝对匿名。
   </div>
 </div>
 
+<script src="chart-core.js"></script>
+<script src="chart-ui.js"></script>
 <script>
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
 const BANDS=[[0,.0025,'0-0.25%'],[.0025,.005,'0.25-0.5%'],[.005,.01,'0.5-1%'],[.01,.015,'1-1.5%'],[.015,.02,'1.5-2%'],[.02,.03,'2-3%'],[.03,.05,'3-5%'],[.05,.075,'5-7.5%'],[.075,.10,'7.5-10%'],[.10,.15,'10-15%'],[.15,.20,'15-20%'],[.20,.30,'20-30%'],[.30,.50,'30-50%'],[.50,Infinity,'50%+']];
-let coins=[], cur=null, wlAll=[], estManual=null, netFetching=false, aggregateSnapshot=null;
+let coins=[], cur=null, wlAll=[], estManual=false, netFetching=false, aggregateSnapshot=null;
 
 const $=id=>document.getElementById(id);
 const fmtUSD=n=>{n=+n||0; if(n>=1e9)return(n/1e9).toFixed(2)+'B'; if(n>=1e6)return(n/1e6).toFixed(2)+'M'; if(n>=1e3)return(n/1e3).toFixed(1)+'K'; return n.toFixed(0);};
@@ -173,12 +181,18 @@ async function fetchAccount(addr){
 }
 
 async function loadCoins(){
-  const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
-  let all=meta.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:ctxs[i]}));
+  let all=[];
+  try{
+    const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
+    all=meta.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:ctxs[i],liveAt:Date.now()}));
+  }catch(error){
+    if(!aggregateSnapshot) throw error;
+    return aggregateSnapshot.coin_list.coins.map(c=>({name:c.n,maxLev:0,ctx:{markPx:aggregateSnapshot.markets[c.n].reference_mark,openInterest:0,dayNtlVlm:c.v,funding:0},liveAt:null}));
+  }
   // xyz builder dex（股票/商品永续），字段与主 dex 同构
   try{
     const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
-    all=all.concat(m2.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:c2[i]})));
+    all=all.concat(m2.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:c2[i],liveAt:Date.now()})));
   }catch(e){}
   // 优先用收割端算好的 avg_7d 名单（与 HL-UPERP-MONITOR 同口径，每6小时随收割更新），避免每次打开拉304根K线
   try{
@@ -252,41 +266,15 @@ async function refresh(){
           const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
           m2.universe.forEach((u,i)=>m[u.name]=c2[i]);
         }catch(e){}
-        coins.forEach(c=>{ if(m[c.name]) c.ctx=m[c.name]; });
+        coins.forEach(c=>{ if(m[c.name]){c.ctx=m[c.name];c.liveAt=Date.now();} });
       }catch(e){}
     }
     cur=coins.find(c=>c.name===$('coin').value)||coins[0];
     const e=estimate(cur), mark=e.mark;
     const f=parseFloat(cur.ctx.funding)*100;
-    $('ctx').innerHTML=`<span>标记价 <b>$${fmtPx(mark)}</b></span><span>未平仓名义 <b>$${fmtUSD(e.oiNtl)}</b></span><span>24h成交 <b>$${fmtUSD(cur.ctx.dayNtlVlm)}</b></span><span>资金费率(1h) <b style="color:${f>=0?'var(--green)':'var(--red)'}">${f.toFixed(4)}%</b></span><span>最大杠杆 <b>${cur.maxLev}x</b></span>`;
-    $('markLine').textContent='现价 $'+fmtPx(mark);
+    $('ctx').innerHTML=cur.liveAt?`<span>标记价 <b>$${fmtPx(mark)}</b></span><span>未平仓名义 <b>$${fmtUSD(e.oiNtl)}</b></span><span>24h成交 <b>$${fmtUSD(cur.ctx.dayNtlVlm)}</b></span><span>资金费率(1h) <b style="color:${f>=0?'var(--green)':'var(--red)'}">${f.toFixed(4)}%</b></span><span>最大杠杆 <b>${cur.maxLev}x</b></span>`:'行情不可用；图表暂以固定分桶参考价定位，OI、资金费率及估算暂不可用。';
 
-    // 估算行
-    const L=e.rows.map(r=>({px:r.liqL,v:r.nL,tag:r.t+'x',pct:r.nL/e.oiNtl*100}));
-    const S=e.rows.map(r=>({px:r.liqS,v:r.nS,tag:r.t+'x',pct:r.nS/e.oiNtl*100}));
-    // Watchlist remains local; network map is already aggregated at its reference mark.
-    const isL=p=>p.coin===cur.name&&p.side==='L'&&p.liqPx>0, isS=p=>p.coin===cur.name&&p.side==='S'&&p.liqPx>0;
-    const rl=wlAll.filter(isL).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1}));
-    const rs=wlAll.filter(isS).map(p=>({px:p.liqPx,v:p.n,tag:p.tag,real:1}));
-    const market=aggregateSnapshot?.markets[cur.name];
-    for(const b of market?.buckets||[]){
-      (b.side==='L'?rl:rs).push({px:b.side==='L'?b.px_high:b.px_low,v:b.notional,tag:BANDS[b.band][2]+'·'+b.positions+'仓',real:1});
-    }
-    renderAggregateSummary();
-    // 估算层显隐：默认自动（有真实数据时隐藏），用户手动切换后尊重选择
-    const hasReal=(rl.length+rs.length)>0;
-    const showEst=estManual===null?!hasReal:estManual;
-    $('estToggle').checked=showEst;
-    $('estHint').style.display=(estManual===null&&!showEst)?'inline':'none';
-
-    L.sort((a,b)=>b.px-a.px); S.sort((a,b)=>b.px-a.px);
-    rl.sort((a,b)=>b.px-a.px); rs.sort((a,b)=>b.px-a.px); // 两区都价格降序：从上往下越来越低，现价分隔线居中原点
-    const maxOf=a=>{let m=1;for(const x of a) if(x.v>m) m=x.v; return m;};
-    const maxN=Math.max(maxOf(L),maxOf(S),maxOf(rl),maxOf(rs)); // 不用展开运算符传参：万级数组会栈溢出（Safari阈值远低于Chrome）
-    const mk=arr=>arr.map(x=>({...x,w:Math.max(1.5,100*Math.sqrt(x.v/maxN))})); // 平方根刻度：长度∝√名义金额，防远端巨桶把近端压成牙签（金额比30:1→视觉比≈5.5:1）
-    const allL=[...(showEst?mk(L):[]),...mk(rl)], allS=[...(showEst?mk(S):[]),...mk(rs)];
-    $('longs').innerHTML=allL.length?allL.map(x=>barRow(x.px,x,x.tag,x.real?'real-l':'est-l')).join(''):'<div class="prog">无数据</div>';
-    $('shorts').innerHTML=allS.length?allS.map(x=>barRow(x.px,x,x.tag,x.real?'real-s':'est-s')).join(''):'<div class="prog">无数据</div>';
+    drawChart();
     $('status').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN');
   }catch(e){ showErr(e); }
 }
@@ -323,6 +311,7 @@ async function loadWatchlist(){
     }catch(e){ out.push({addr:a,err:e.message}); }
     $('wlProg').textContent=(++done)+' / '+addrs.length;
   });
+  window.watchlistAt=Date.now();
   const rows=out.map(o=>{
     if(o.err) return `<tr><td colspan="3" style="color:var(--red)">${o.addr.slice(0,10)}… 查询失败: ${o.err}</td></tr>`;
     const ps=o.ps.map(p=>`<div>${p.coin} ${p.side==='L'?'多':'空'} ${p.szi} @${fmtPx(p.entryPx)} · ${p.levType==='cross'?'跨':'逐'}${p.lev}x · 强平 <b style="color:${p.side==='L'?'var(--green)':'var(--red)'}">$${fmtPx(p.liqPx)}</b> · 浮盈 ${p.upnl>=0?'+':''}$${fmtUSD(p.upnl)} · 名义 $${fmtUSD(p.n)}</div>`).join('')||'<span style="color:var(--muted)">无仓位</span>';
@@ -334,34 +323,7 @@ async function loadWatchlist(){
 
 // Public payload is validated before rendering or caching; never accepts legacy snapshots.
 const AGGREGATE_URL='https://raw.githubusercontent.com/xyz1367487/hl-liqmap/aggregate/data/aggregate.json';
-function validateAggregate(s){
-  const exact=(o,names)=>{if(!o||typeof o!=='object'||Array.isArray(o)||Object.keys(o).sort().join('|')!==names.split(' ').sort().join('|')) throw Error('聚合 schema 不匹配');};
-  const num=(v,positive=false)=>{if(typeof v!=='number'||!Number.isFinite(v)||v<0||(positive&&v===0)) throw Error('聚合数值无效');};
-  exact(s,'schema_version generated_at_unix privacy coin_list markets');
-  if(s.schema_version!==1) throw Error('聚合版本不支持');
-  num(s.generated_at_unix,true);
-  exact(s.privacy,'scope buckets');
-  if(s.privacy.scope!=='aggregate_only'||s.privacy.buckets!=='all_nonempty') throw Error('聚合隐私策略不匹配');
-  exact(s.coin_list,'updated caliber threshold coins');
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(s.coin_list.updated)||s.coin_list.caliber!=='avg_7d'||s.coin_list.threshold!==5000000||!Array.isArray(s.coin_list.coins)) throw Error('币种口径不匹配');
-  const names=new Set();
-  for(const c of s.coin_list.coins){exact(c,'n v'); if(typeof c.n!=='string'||!/^[A-Za-z0-9@:_./-]{1,64}$/.test(c.n)||names.has(c.n)) throw Error('币名无效'); num(c.v); names.add(c.n);}
-  exact(s.markets,[...names].join(' '));
-  for(const m of Object.values(s.markets)){
-    exact(m,'reference_mark buckets'); num(m.reference_mark,true);
-    if(!Array.isArray(m.buckets)) throw Error('桶列表无效');
-    const seen=new Set();
-    for(const b of m.buckets){
-      exact(b,'side band notional positions px_low px_high');
-      const key=b.side+':'+b.band;
-      if(!['L','S'].includes(b.side)||!Number.isInteger(b.band)||b.band<0||b.band>=14||!Number.isInteger(b.positions)||b.positions<=0||seen.has(key)) throw Error('桶无效');
-      seen.add(key);num(b.notional);num(b.px_low,true);num(b.px_high,true);
-      if(b.px_low>b.px_high) throw Error('价格区间无效');
-    }
-  }
-  if(/0x[a-fA-F0-9]{40}/.test(JSON.stringify(s))) throw Error('公开输出含地址');
-  return s;
-}
+function validateAggregate(s){ return LiqChart.validate(s); }
 function renderAggregateSummary(){
   if(!aggregateSnapshot||!cur) return;
   const m=aggregateSnapshot.markets[cur.name];
@@ -390,9 +352,9 @@ async function loadNet(){
   }finally{netFetching=false;$('netBtn').disabled=false;}
 }
 
-$('ls').oninput=()=>{ $('lsLabel').textContent=$('ls').value+'/'+(100-$('ls').value); refresh(); };
+$('ls').oninput=()=>{ $('lsLabel').textContent=$('ls').value+'/'+(100-$('ls').value); drawChart(); };
 $('refresh').onclick=()=>refresh();
-$('estToggle').onchange=()=>{ estManual=$('estToggle').checked; refresh(); };
+$('estToggle').onchange=()=>{ estManual=$('estToggle').checked; drawChart(); };
 $('wlBtn').onclick=loadWatchlist;
 $('wlClear').onclick=()=>{ $('wl').value=''; wlAll=wlAll.filter(p=>p.net); localStorage.removeItem('liqmap_watchlist'); $('wlTable').innerHTML=''; refresh(); };
 $('netBtn').onclick=loadNet;
@@ -404,9 +366,9 @@ $('wl').value=localStorage.getItem('liqmap_watchlist')||'';
     const cached=validateAggregate(JSON.parse(localStorage.getItem('liqmap_aggregate_v1')||'null'));
     if(Date.now()/1000-cached.generated_at_unix<6*3600) aggregateSnapshot=cached;
   }catch(e){}
-  await refresh();
   await loadNet();
-  setInterval(()=>{if($('auto').checked&&!netFetching) refresh();},10000);
+  if(!coins.length) await refresh();
+  setInterval(()=>{if($('auto').checked&&!netFetching) refresh();else if(cur) drawChart();},10000);
   setInterval(()=>{if($('auto').checked&&!netFetching) loadNet();},30*60000);
 })();
 </script>
