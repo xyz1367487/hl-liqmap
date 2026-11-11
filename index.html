@@ -323,33 +323,84 @@ async function loadWatchlist(){
 
 // Public payload is validated before rendering or caching; never accepts legacy snapshots.
 const AGGREGATE_URL='https://raw.githubusercontent.com/xyz1367487/hl-liqmap/aggregate/data/aggregate.json';
+const AGGREGATE_SOURCES=[
+  {name:'GitHub Raw',url:AGGREGATE_URL},
+  {name:'GitHub API',url:'https://api.github.com/repos/xyz1367487/hl-liqmap/contents/data/aggregate.json?ref=aggregate',headers:{Accept:'application/vnd.github.raw+json'}},
+  {name:'jsDelivr CDN',url:'https://cdn.jsdelivr.net/gh/xyz1367487/hl-liqmap@aggregate/data/aggregate.json'}
+];
+let aggregateState='idle', aggregateSource='本机有效缓存', aggregateFailures=[];
 function validateAggregate(s){ return LiqChart.validate(s); }
+function aggregateEmptyText(){
+  return aggregateSnapshot?'该币暂无真实聚合桶':aggregateState==='loading'?'正在加载聚合快照':aggregateState==='error'?'聚合读取失败，请点击聚合快照按钮重试':'聚合快照尚未加载';
+}
 function renderAggregateSummary(){
-  if(!aggregateSnapshot||!cur) return;
-  const m=aggregateSnapshot.markets[cur.name];
+  if(!aggregateSnapshot){
+    $('netMeta').textContent=aggregateEmptyText();
+    $('netTable').textContent='';
+    return;
+  }
+  const m=aggregateSnapshot.markets[cur?.name];
   const total=side=>(m?.buckets||[]).filter(b=>b.side===side).reduce((n,b)=>n+b.notional,0);
-  const age=Math.round((Date.now()/1000-aggregateSnapshot.generated_at_unix)/60);
-  $('netMeta').textContent='聚合生成于 '+new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN')+' · '+age+'分钟前'+(age>120?' · ⚠️快照已停滞超过2小时':'');
-  $('netTable').textContent=m ? cur.name+' · 分桶参考价 $'+fmtPx(m.reference_mark)+' · 全部非空桶名义：多 $'+fmtUSD(total('L'))+' / 空 $'+fmtUSD(total('S')) : '该币尚无聚合快照';
+  const age=Math.max(0,Math.round((Date.now()/1000-aggregateSnapshot.generated_at_unix)/60));
+  $('netMeta').textContent='数据源 '+aggregateSource+' · 聚合生成于 '+new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN')+' · '+age+'分钟前'+(age>120?' · ⚠️快照已停滞超过2小时':'');
+  $('netTable').textContent=cur?(m ? cur.name+' · 分桶参考价 $'+fmtPx(m.reference_mark)+' · 全部非空桶名义：多 $'+fmtUSD(total('L'))+' / 空 $'+fmtUSD(total('S')) : '该币暂无真实聚合桶'):'';
+}
+async function readAggregateSource(source,timeoutMs=12000){
+  const controller=new AbortController();
+  let timer,stage='网络';
+  const failure=(category)=>Object.assign(new Error(category),{category});
+  const request=(async()=>{
+    const r=await fetch(source.url,{headers:source.headers,signal:controller.signal,credentials:'omit',redirect:'error',cache:'no-store'});
+    // Redirects are refused before following; only the exact public endpoint is accepted.
+    if(r.url&&r.url!==source.url) throw failure('重定向');
+    if(!r.ok) throw failure('HTTP '+r.status);
+    const text=await r.text();
+    stage='解析'; const data=JSON.parse(text);
+    stage='schema'; return validateAggregate(data);
+  })();
+  try{
+    return await Promise.race([request,new Promise((_,reject)=>{timer=setTimeout(()=>{reject(failure('超时'));controller.abort();},timeoutMs);})]);
+  }catch(e){throw failure(e.category||stage);}
+  finally{clearTimeout(timer);}
 }
 async function loadNet(){
   if(netFetching) return;
-  netFetching=true; $('netBtn').disabled=true;
+  netFetching=true; aggregateState='loading'; aggregateFailures=[]; $('netBtn').disabled=true;
+  let loaded=false;
   try{
-    const r=await fetch(AGGREGATE_URL+'?_='+Date.now());
-    if(!r.ok) throw Error('HTTP '+r.status);
-    aggregateSnapshot=validateAggregate(await r.json());
-    try{localStorage.setItem('liqmap_aggregate_v1',JSON.stringify(aggregateSnapshot));}catch(e){}
-    $('netProg').textContent='聚合快照模式'; clearErr();
+    for(const source of AGGREGATE_SOURCES){
+      $('netProg').textContent='正在读取 '+source.name+(aggregateFailures.length?' · '+aggregateFailures.join('；'):'');
+      renderAggregateSummary(); if(cur) drawChart();
+      try{
+        const candidate=await readAggregateSource(source);
+        if(aggregateSnapshot&&candidate.generated_at_unix<aggregateSnapshot.generated_at_unix){
+          aggregateFailures.push(source.name+'：旧于有效缓存（拒绝倒退）');
+          continue;
+        }
+        aggregateSnapshot=candidate; aggregateSource=source.name; aggregateState='ready'; loaded=true;
+        try{
+          localStorage.setItem('liqmap_aggregate_v1',JSON.stringify(aggregateSnapshot));
+          localStorage.setItem('liqmap_aggregate_source',JSON.stringify({name:aggregateSource,generated_at_unix:candidate.generated_at_unix}));
+        }catch(e){}
+        $('netProg').textContent='聚合读取成功 · '+source.name+(aggregateFailures.length?' · '+aggregateFailures.join('；'):'');
+        clearErr(); break;
+      }catch(e){aggregateFailures.push(source.name+'：'+e.category);}
+    }
+    if(!loaded){
+      aggregateState='error';
+      $('netProg').textContent=(aggregateSnapshot?'更新失败，保留有效聚合快照':'聚合读取失败')+' · '+aggregateFailures.join('；');
+    }
+  }finally{
+    netFetching=false; $('netBtn').disabled=false;
+    renderAggregateSummary(); if(cur) drawChart();
+  }
+  if(loaded){
     // Refresh the monitored list when a new generation arrives, preserving selection.
     const selected=$('coin').value;
     coins=[];
     await refresh();
     if(coins.some(c=>c.name===selected)){$('coin').value=selected;await refresh();}
-  }catch(e){
-    $('netProg').textContent=aggregateSnapshot?'更新失败，保留旧聚合快照':'聚合快照不可用';
-    showErr(e);
-  }finally{netFetching=false;$('netBtn').disabled=false;}
+  }
 }
 
 $('ls').oninput=()=>{ $('lsLabel').textContent=$('ls').value+'/'+(100-$('ls').value); drawChart(); };
@@ -364,7 +415,12 @@ $('wl').value=localStorage.getItem('liqmap_watchlist')||'';
 (async()=>{
   try{
     const cached=validateAggregate(JSON.parse(localStorage.getItem('liqmap_aggregate_v1')||'null'));
-    if(Date.now()/1000-cached.generated_at_unix<6*3600) aggregateSnapshot=cached;
+    aggregateSnapshot=cached;
+    try{
+      const origin=JSON.parse(localStorage.getItem('liqmap_aggregate_source')||'null');
+      if(origin?.generated_at_unix===cached.generated_at_unix&&AGGREGATE_SOURCES.some(s=>s.name===origin.name)) aggregateSource=origin.name+'（本机缓存）';
+    }catch(e){}
+    renderAggregateSummary();
   }catch(e){}
   await loadNet();
   if(!coins.length) await refresh();

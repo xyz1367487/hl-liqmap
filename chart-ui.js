@@ -69,7 +69,7 @@ function drawChart(){
   }
   html+=`<line data-reference="${reference}" x1="${x(reference)}" x2="${x(reference)}" y1="${top}" y2="${bottom}" stroke="#91a1b9" stroke-dasharray="2 5"/><line data-current="${mark}" x1="${x(mark)}" x2="${x(mark)}" y1="${top}" y2="${bottom}" stroke="#efca7b" stroke-width="1.5" stroke-dasharray="7 5"/></g>`;
   if(mark>=min&&mark<=max) html+=`<text x="${Math.min(right-100,Math.max(left,x(mark)+6))}" y="42" style="fill:#efca7b">${Number.isFinite(liveAge)?'行情':'参考定位'} $${fmtPx(mark)}</text>`;
-  if(!base.length) html+=`<text x="${(left+right)/2}" y="240" text-anchor="middle">${watch?'Watchlist 尚无该币有效强平价，请先拉取仓位':'该币暂无真实聚合桶'}</text>`;
+  if(!base.length) html+=`<text x="${(left+right)/2}" y="240" text-anchor="middle">${watch?'Watchlist 尚无该币有效强平价，请先拉取仓位':aggregateEmptyText()}</text>`;
   else if(!visible.length) html+=`<text x="${(left+right)/2}" y="240" text-anchor="middle">当前价格范围无真实桶，请扩大范围</text>`;
   svg.innerHTML=html;tip.hidden=true;
   window.chartInspection={coin:cur.name,version,mark,reference,window:[...chartWindow],baseCount:base.length,visibleCount:visible.length,totals:{L:total('L'),S:total('S')},cumulative: cum.totals,uncertain:cum.uncertain,past:cum.past,barMax,cumMax};
