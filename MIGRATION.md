@@ -1,3 +1,41 @@
+# 私有采集、公开聚合迁移指南
+
+## 当前阶段：价格横轴图与 schema2 已上线
+
+文档基线为 public main `f45c0b918cdf823ac2b66b7908cc009d28a7e63d` 的远端 README/MIGRATION，不使用含既有修改和旧数据的本地 checkout 整树。北京时间 2026-11-11 16:11:17 的该提交上线 `index.html`、`chart-core.js`、`chart-ui.js`、`chart.css`；代码检查 `42985052846`、Pages 部署 `42985052777` 均 completed/success。本节取代下方旧阶段“待切换/尚未上线”的描述；旧记录及验证原文保留供追溯。
+
+### 图表与字段契约（5/10/25/50bp）
+
+schema2 根字段仍为 `schema_version`、`generated_at_unix`、`privacy`、`coin_list`、`markets`；每市场为 `reference_mark`、`bucket_step`、`buckets`。每桶为 `side`、非负整数 `index`、`notional`、`positions`、`px_low`、`px_high`。`privacy` 仍为 `{"scope":"aggregate_only","buckets":"all_nonempty"}`，不是匿名保证。
+
+私有端直接遍历原始有效仓位，以 `bucket_step=reference_mark*0.0005` 形成零点锚定网格 `[index*bucket_step,(index+1)*bucket_step)`，稀疏输出全部非空桶，无范围截断，不从旧14档摊分。5bp=参考价的0.05%，10bp=0.1%，25bp=0.25%，50bp=0.5%；后面三项只合并相邻2/5/10个基础桶，保持金额和仓位数，不代表实时现价的百分比档位、杠杆或精度保证。schema1 仍读 `band`（0–13）并按原桶极值区间展示，禁止细分与均匀摊开；旧数据的细分辨率控件禁用。
+
+横轴是线性美元价格，绿/红细桶柱分别为多/空潜在强平名义，左轴表示完整桶美元金额。右轴是独立线性美元累计轴，双累计分别从行情价向多头下方、空头上方推进，以全部基础桶为输入，在远端强平价极值阶跃计入，不在桶内部插值。同价事件合并；缩放只裁切视窗，分辨率只合并显示柱，均不重置基础累计。跨现价待定位桶与方向已越过现价桶保留并单列，三类金额对每侧守恒，不声称越过现价即已爆仓。估算虚线柱使用左轴，不计入真实累计；Watchlist 为独立源，避免与聚合重复叠加。
+
+价格窗口、放大/缩小、滚轮、手填范围及重置可调整视图；hover 或键盘聚焦可查看完整桶区间、强平价极值、名义、仓位数及累计。固定参考价线来自导出时 `reference_mark`，只随新快照更新；最新行情线来自浏览器行情 API，正常约10秒刷新，现价变化不精确重分私有真实桶。行情不可用时标明“参考价定位（非实时现价）”。分别展示聚合生成时间、Watchlist 拉取时间、行情获取时间；聚合/Watchlist 超过2小时提示过期，行情超过60秒提示行情过期，抓取失败保留旧图并报错，不能视作新快照。
+
+### 保留的规则与私有边界
+
+账户权益≥10000美元、监控币种 avg_7d>500万美元、双 dex、有效强平价等采集筛选沿用原规则；不增加贡献人数/k 门槛。公开全部非空桶，桶数随输入与快照变化。无有效强平价的仓位不计入地图，图中总额不等于账户全部仓位名义。“全网”仅覆盖已发现且满足筛选的账户。
+
+Watchlist 地址只存在本机浏览器 localStorage；用户拉取时浏览器直连 Hyperliquid 公开 API，不上传公开仓库或私有采集池。公开 schema 不含地址、账户列表、稳定标识或逐账户明细；单人贡献桶会保留金额、数量与极值，仍可借链上/API关联、跨期差分推断个别账户。细桶不构成匿名保护；完整索引、原始逐账户文件与日志继续留私有侧，不将本地真实样本或 validation-private 公开。
+
+### 已完成的旧三文件移除（仅当前版本）
+
+经此前明确授权，公开 `main:data/addresses.json`、`main:data/accounts.json`、`snap:data/snapshot.json` 已通过新普通提交移除当前版本：main 分别为 `bcd5a21d7068509fb42c432f5bdbb24f42579035`、`917949c16ba46562ed1d4468e293684cea8c65ab`，snap 为 `15ce86a36aca12b79906638e7bc28f457f912f04`。snap 分支保留为空树，Git 历史与旧 blob 仍保留；本地副本与私有备份未删除。本次文档工作不再执行删除，也不清理历史、缓存或第三方副本，不能声称旧数据已保密。若需恢复，应核对授权与目标，通过新提交恢复指定旧 blob；恢复公开路径会再次公开原始数据。
+
+### 手动运行实绩与 schedule 待确认事项
+
+本次手动 snapshot run `42985703103`（event=`workflow_dispatch`）completed/success；Snapshot、Export/archive、state 回写、SSH 发布均成功，Harvest 按模式 skipped。私有 state 提交 `1993ccf97476cc6bf8b6b970dfc42bcf0ab23497`，父提交 `d3606dad943f3fd6461dfe7a5392c05ef556abc1`；公开 aggregate 提交 `0d92e317ca8296c910a0e77797e84d82f480b926`，父提交 `4764a1818e323865b9ca16e5aa6684e3ed4c82de`，tree 唯一文件 `data/aggregate.json`。**北京时间 2026-11-11 16:22:31 的快照**为92市场、16,832基础细桶，schema2 严格校验通过、地址模式0；与该次私有归档重算完全相等。数量不是固定配置，不能外推到下一次快照。
+
+schedule run `42986049053` 于16:18:55创建、16:28:07 completed/success；本轮 Harvest 和私有 state 回写成功，Snapshot、Export/archive、Publish 均按原规则 skipped。定时收割恢复一轮，公开聚合没有由该 run 更新；定时快照与发布持续恢复仍待观察。收割 cron `40 1,7,13,19 * * *`、快照 cron `13,43 * * * *` 是配置节奏，不是持续实绩；此前停滞根因未证实。手动链路成功、定时收割成功与前端 Pages 成功须分开陈述；定时快照恢复验收仍需相应 schedule 实际成功、发布步骤成功与聚合生成时间前进。
+
+发布继续使用仅目标公开仓库的 deploy key，权限为仓库级，固定 aggregate 分支和唯一文件由发布器约束，不是 GitHub 分支级 key。私钥只留私有 Actions secret；无新增 secrets、变量、权限、收费后端或调度变更。不重复初始化，不用旧 seed/state 覆盖生产状态，不从旧 checkout 上传整树。下方安装、命令与待批准表属于历史阶段，不是本轮执行清单。
+
+## 历史迁移指南（已由上述最新阶段取代，保留原文）
+
+以下保留 public main `f45c0b918cdf823ac2b66b7908cc009d28a7e63d` 中的旧指南。关于“index 待切换”“SSH 待验证”“三文件仍待移除”与“14档为新导出算法”的表述已被上文取代；历史样本桶数只适用于各自当时输入，不代表当前常量。原验证记录不重跑。
+
 # 私有采集、公开聚合迁移指南（public index 待切换）
 
 阶段状态：北京时间 2026-11-11（UTC+08:00）。私有采集、快照、导出归档与 state 回写已由交接记录核实成功；旧公开 harvest/snapshot 已 guard，不再定时写入。单仓库 deploy key 自动发布 aggregate 的实现已交付，真实 SSH 发布与公开分支结果仍待主线程核验。public index 尚未切换，后续主线程确认时再更新状态；不能写成全流程上线已成功。本轮仅整理本地文档，不推送、不删除或移除 main/snap 数据、不重写历史。旧 data/ 和 snap 仍公开，停止新写入不会撤回旧数据。
