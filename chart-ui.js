@@ -1,5 +1,5 @@
 /* HL 清算地图 · AGPL-3.0-or-later. SVG, no build or third party runtime. */
-let chartWindow=null, chartIdentity='', chartWired=false;
+let chartWindow=null, chartIdentity='', chartWired=false, panDrag=null;
 function drawChart(){
   if(!cur) return;
   const C=LiqChart, svg=$('priceChart'), frame=$('chartFrame'), tip=$('chartTooltip');
@@ -74,6 +74,7 @@ function drawChart(){
   svg.innerHTML=html;tip.hidden=true;
   window.chartInspection={coin:cur.name,version,mark,reference,window:[...chartWindow],baseCount:base.length,visibleCount:visible.length,totals:{L:total('L'),S:total('S')},cumulative: cum.totals,uncertain:cum.uncertain,past:cum.past,barMax,cumMax};
   function tooltip(event){
+    if(panDrag) return;
     const target=event.target.closest('[data-bar],[data-est]');if(!target){tip.hidden=true;return;}
     const estimated=target.hasAttribute('data-est'),b=estimated?est[+target.dataset.est]:visible[+target.dataset.bar];
     if(!b) return;
@@ -89,7 +90,43 @@ function drawChart(){
     tip.style.left=Math.max(8,Math.min(r.width-350,px-r.left+14))+'px';
     tip.style.top=Math.max(8,Math.min(r.height-190,py-r.top-50))+'px';
   }
-  svg.onpointermove=tooltip;svg.onmousemove=tooltip;svg.onmouseover=tooltip;svg.onfocusin=tooltip;svg.onpointerdown=tooltip;svg.onpointerleave=()=>tip.hidden=true;svg.onmouseleave=()=>tip.hidden=true;svg.onfocusout=()=>tip.hidden=true;
+  const stopPan=()=>{if(!panDrag) return;panDrag=null;svg.classList.remove('dragging');};
+  function startPan(event){
+    if(event.button!==undefined&&event.button!==0) return;
+    if(!chartWindow) return;
+    const box=svg.getBoundingClientRect();
+    if(!(box.width>0)) return;
+    const left=box.left+box.width*(82/1120), right=box.left+box.width*(1035/1120);
+    panDrag={startX:event.clientX,moved:false,width:chartWindow[1]-chartWindow[0],min:chartWindow[0],max:chartWindow[1],left,right,pointerId:event.pointerId,startLo:chartWindow[0],startHi:chartWindow[1]};
+    svg.classList.add('dragging');
+    try{svg.setPointerCapture?.(event.pointerId);}catch(e){}
+    tip.hidden=true;event.preventDefault();
+  }
+  function movePan(event){
+    if(!panDrag||!chartWindow) return;
+    const dx=event.clientX-panDrag.startX;
+    if(!panDrag.moved&&Math.abs(dx)<3) return;
+    panDrag.moved=true;
+    const span=panDrag.startHi-panDrag.startLo, pixels=Math.max(1,panDrag.right-panDrag.left);
+    const shift=-(dx/pixels)*span;
+    let lo=panDrag.startLo+shift, hi=panDrag.startHi+shift;
+    if(lo<0){hi=span;lo=0;}
+    if(hi-lo!==span){hi=lo+span;}
+    chartWindow=[lo,hi];
+    drawChart();event.preventDefault();
+  }
+  function endPan(event){
+    if(!panDrag) return;
+    const pointerId=panDrag.pointerId;
+    stopPan();
+    try{svg.releasePointerCapture?.(pointerId);}catch(e){}
+    if(event){event.preventDefault();}
+  }
+  svg.onpointerdown=event=>{tooltip(event);startPan(event);};
+  svg.onpointermove=event=>{if(panDrag){movePan(event);return;}tooltip(event);};
+  svg.onpointerup=endPan;svg.onpointercancel=endPan;window.addEventListener('pointerup',endPan);
+  svg.onmousemove=event=>{if(!panDrag)tooltip(event);};svg.onmouseover=tooltip;svg.onfocusin=tooltip;
+  svg.onpointerleave=()=>{if(!panDrag)tip.hidden=true;};svg.onmouseleave=()=>{if(!panDrag)tip.hidden=true;};svg.onfocusout=()=>tip.hidden=true;
   svg.onkeydown=event=>{if(event.key==='Escape')tip.hidden=true;if(['ArrowLeft','ArrowRight'].includes(event.key)){const nodes=[...svg.querySelectorAll('[data-bar]')],i=nodes.indexOf(document.activeElement);nodes[Math.max(0,Math.min(nodes.length-1,i+(event.key==='ArrowRight'?1:-1)))]?.focus();event.preventDefault();}};
   if(!chartWired){
     chartWired=true;
