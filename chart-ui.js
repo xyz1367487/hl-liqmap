@@ -156,11 +156,24 @@ function drawChart(){
       }
       tip.textContent=`${b.side==='L'?'多头':'空头'} · ${watch?'本机Watchlist':'公开聚合'}${legacy?' · 旧14档第'+(b.band+1)+'档':''}\n${legacy?'原桶极值区间':'固定价格桶'} $${precise(b.lo)} — $${precise(b.hi)}${legacy?'':'（右端不含）'}\n桶内强平价 $${precise(b.px_low)} — $${precise(b.px_high)}\n${distanceLine}本桶名义 $${money(b.notional)} · ${b.positions} 仓\n${levLine}从行情价至远端极值累计 $${money(cum.at(b.side,far))}（含全部杠杆档，不受隐藏影响）\n${crosses?'跨现价桶：区间内金额不可定位；累计仅含可确定完整基础桶':b.side==='L'&&b.px_high>mark||b.side==='S'&&b.px_low<mark?'方向已越过现价：仍保留原桶，未认定已爆仓':'累计仅计同侧完整基础桶，含视窗外近端桶'}`;
     }
+    // Fixed positioning keeps the panel above the heading and outside any scroll clipping.
     tip.hidden=false;
-    const r=frame.getBoundingClientRect(),tr=target.getBoundingClientRect();
+    const tr=target.getBoundingClientRect();
     const px=event.clientX||tr.x+tr.width/2,py=event.clientY||tr.y;
-    tip.style.left=Math.max(8,Math.min(r.width-350,px-r.left+14))+'px';
-    tip.style.top=Math.max(8,Math.min(r.height-190,py-r.top-50))+'px';
+    const pad=12;
+    tip.style.left='0px';tip.style.top='0px';
+    const tw=tip.offsetWidth||320,th=tip.offsetHeight||160;
+    const fr=frame.getBoundingClientRect();
+    // Stay inside the plot frame so the panel never covers the chart heading.
+    const topLimit=Math.max(pad,fr.top+pad);
+    const bottomLimit=Math.max(topLimit,Math.min(window.innerHeight,fr.bottom)-pad);
+    let left=px+16,top=py-th-16;
+    if(top<topLimit) top=py+20;
+    if(left+tw>window.innerWidth-pad) left=px-tw-16;
+    if(left<pad) left=pad;
+    left=Math.min(left,Math.max(pad,window.innerWidth-tw-pad));
+    top=Math.max(topLimit,Math.min(top,bottomLimit-th));
+    tip.style.left=left+'px';tip.style.top=top+'px';
   }
   const stopPan=()=>{if(!panDrag) return;panDrag=null;svg.classList.remove('dragging');};
   function startPan(event){
