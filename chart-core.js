@@ -18,7 +18,11 @@
   function validate(s){
     const exact=(o,fields)=>{if(!o||typeof o!=='object'||Array.isArray(o)||Object.keys(o).sort().join('|')!==fields.split(' ').filter(Boolean).sort().join('|')) throw Error('聚合 schema 不匹配');};
     const num=(v,positive=false)=>{if(typeof v!=='number'||!Number.isFinite(v)||v<0||(positive&&v===0)) throw Error('聚合数值无效');};
-    exact(s,'schema_version generated_at_unix privacy coin_list markets');
+    exact(s,'schema_version generated_at_unix privacy coin_list markets'+(Object.hasOwn(s||{},'selection')?' selection':''));
+    if(Object.hasOwn(s,'selection')){
+      exact(s.selection,'unit operator threshold account_equity_min');
+      if(s.selection.unit!=='position_notional_usd'||s.selection.operator!=='gt'||s.selection.threshold!==5000||s.selection.account_equity_min!==null) throw Error('筛选口径不支持');
+    }
     if(![1,2,3].includes(s.schema_version)) throw Error('聚合版本不支持');
     num(s.generated_at_unix,true); exact(s.privacy,'scope buckets');
     if(s.privacy.scope!=='aggregate_only'||s.privacy.buckets!=='all_nonempty') throw Error('聚合策略不匹配');
@@ -59,6 +63,9 @@
     }
     if(/0x[a-fA-F0-9]{40}/.test(JSON.stringify(s))) throw Error('公开输出含地址');
     return s;
+  }
+  function selectionLabel(s){
+    return s?.selection?'单仓位名义 > $5,000 · 无账户权益门槛':'旧快照：账户总值 ≥ $10,000（非新仓位口径）';
   }
   function normalize(m,version){
     if(!m) return [];
@@ -122,7 +129,7 @@
     if(!(domain[1]>domain[0])) throw Error('无效坐标范围');
     return value=>range[0]+(value-domain[0])/(domain[1]-domain[0])*(range[1]-range[0]);
   }
-  const api={FRACTION,LEV_LIMITS,LEV_LABELS,LEV_COUNT,levBand,levSum,gridIndex,validate,normalize,coarsen,localBuckets,cumulative,linear};
+  const api={FRACTION,LEV_LIMITS,LEV_LABELS,LEV_COUNT,levBand,levSum,gridIndex,validate,selectionLabel,normalize,coarsen,localBuckets,cumulative,linear};
   if(typeof module!=='undefined'&&module.exports) module.exports=api;
   root.LiqChart=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

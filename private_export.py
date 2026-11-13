@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from aggregate import aggregate
+from position_scan import SELECTION
 from harvest import info, require_private_data_dir
 import harvest
 
@@ -15,6 +16,8 @@ def main():
     state = Path(harvest.DATA_DIR)
     snapshot = json.loads((state / 'snapshot.json').read_text())
     coins = json.loads((state / 'coins.json').read_text())
+    if snapshot.get('selection') != SELECTION:
+        raise ValueError('Collect a new position-filtered snapshot before exporting')
     marks = {}
     for dex in (None, 'xyz'):
         payload = {'type': 'metaAndAssetCtxs'}

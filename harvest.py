@@ -21,11 +21,8 @@
 2. 分段订阅 WS 成交流（默认 5×60s，段间重连、断线自动续采，连续失败5次才放弃），
    收割 users 字段里的地址——xyz-only 交易者因此也能进索引；
 3. 合并进 data/addresses.json（记录 fs=first_seen / ls=last_seen，兼容旧格式）；
-4. 对【新地址】+【候选池中 $8k~$12k 缓冲带的老地址】+【$12k 以上账户随机抽 10% 轮转复查】逐个查 clearinghouseState：
-   - 账户值 >= $8k 进候选池 data/accounts.json（主 dex 的 accountValue = 账户总值，
-     含 xyz 子账户，实测口径，无需双拉）；
-   - 掉出 $8k 的从候选池移除（仍在 addresses 索引中）；
-5. 收割统计（查询数/成功/失败/失败率/分段情况/耗时）写进 data meta，页面可查。
+4. 完整保存地址索引 fs/ls；快照时按持久化轮转队列补查全部历史地址（含曾退出的地址）。
+5. 候选与快照仅按单仓位 abs(positionValue)>5000 及当前监控币名单筛选；主/xyz 均查询。
 
 诚实边界：HL 无"按余额枚举账户"端点，索引只能覆盖"采集开始后活跃过的地址"，
 所以"全网"永远是"已发现地址的全网"。
@@ -36,8 +33,10 @@ import time
 import http.client
 import urllib.request
 import asyncio
-import random
 import threading
+import math
+
+from position_scan import SELECTION, POSITION_MIN, prepare, plan, finish, progress
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -47,14 +46,9 @@ CAPTURE_SECONDS = int(os.environ.get('HARVEST_SECONDS', '300'))
 SEGMENT_SECONDS = int(os.environ.get('HARVEST_SEGMENT', '60'))  # 单段时长，段间重连
 MAX_SEG_FAILS = 5                                              # 连续段失败上限，超过则带着已有地址收工
 VOL_MIN = 5_000_000         # 币种日成交门槛（美元名义；主片区与xyz片区同标准$5M，2026-09-28用户拍板，原$10M）
-POOL_MIN = 8_000            # 候选池下限（相对 $10k 门槛留 20% 缓冲）
-RECHECK_MAX = 12_000        # 缓冲带上限：此区间内的老地址每次复查
-SNAP_MIN = 10_000           # 快照门槛：独立于候选池，避免每次快照白查 $8k~$10k 地址
-ROTATION_DAYS = 3           # 老账户轮转复查间隔（天）：>$12k 的账户从不进缓冲带，靠此机制淘汰缩水账户
-ROTATION_RATE = 0.10        # 每次从"超出缓冲带上限"的老账户里随机抽取比例
-CONCURRENCY = 10
 SNAP_CONCURRENCY = 6       # 快照模式并发：每 worker 一条长连接 + pacing，合计约 22 请求/秒（实测安全区）
 SNAP_PACE = float(os.environ.get('HARVEST_SNAP_PACE', '0.35'))  # 每地址间隔秒数
+SCAN_SECONDS = 1200  # Stop scheduling after 20 min; preserve work for the next scheduled run.
 SNAP_LIMIT = int(os.environ.get('HARVEST_SNAPSHOT_LIMIT', '0'))  # 冒烟测试用：>0 只拉前 N 个地址
 TODAY = time.strftime('%Y-%m-%d', time.gmtime())
 DATA_DIR = os.environ.get('PRIVATE_DATA_DIR')
@@ -210,103 +204,60 @@ async def harvest(coins):
     return addrs, stats
 
 
-def get_equity(addr):
-    st = info({'type': 'clearinghouseState', 'user': addr})
-    return float(st.get('marginSummary', {}).get('accountValue', 0))
+def _read_state(name, default):
+    path = os.path.join(DATA_DIR, name + '.json')
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (ValueError, OSError):
+        if name != 'position_recheck':
+            raise
+        backup = os.path.join(DATA_DIR, 'position_recheck.backup.json')
+        try:
+            with open(backup) as f:
+                return json.load(f)
+        except (ValueError, OSError):
+            print('[recheck] checkpoint damaged; replaying full index', flush=True)
+            return default
+
+
+def _write_state(name, data):
+    if name == 'position_recheck':
+        previous = _read_state(name, None)
+        if previous is not None:
+            with open(os.path.join(DATA_DIR, 'position_recheck.backup.json'), 'w') as f:
+                json.dump(previous, f, separators=(',', ':'), allow_nan=False)
+    with open(os.path.join(DATA_DIR, name + '.json'), 'w') as f:
+        json.dump(data, f, separators=(',', ':'), allow_nan=False)
 
 
 def main():
     t_start = time.time()
     coins = load_coins()
-    print(f'[coins] {len(coins)} coins（avg_7d 名单，主+xyz双dex）', flush=True)
     harvested, hstats = asyncio.run(harvest(coins))
-
-    addr_path = os.path.join(DATA_DIR, 'addresses.json')
-    acc_path = os.path.join(DATA_DIR, 'accounts.json')
-    addresses, accounts = {}, {}
-    if os.path.exists(addr_path):
-        with open(addr_path) as f:
-            raw = json.load(f).get('addresses', {})
-        # 向前兼容：旧格式 {addr: date_str}，新格式 {addr: {fs, ls}}
-        for a, v in raw.items():
-            addresses[a] = v if isinstance(v, dict) else {'fs': v, 'ls': v}
-    if os.path.exists(acc_path):
-        with open(acc_path) as f:
-            accounts = json.load(f).get('accounts', {})
-
-    new_addrs = [a for a in harvested if a not in addresses]
-
-    # 缓冲带复查：$8k~$12k 之间的账户每次都查
-    recheck = [a for a, rec in accounts.items() if POOL_MIN <= rec.get('v', 0) < RECHECK_MAX]
-
-    # 轮转复查：$12k 以上的账户随机抽 10%（防止长期不查、候选池积累缩水账户）
-    cutoff = time.strftime('%Y-%m-%d', time.gmtime(time.time() - ROTATION_DAYS * 86400))
-    rotation_pool = [a for a, rec in accounts.items()
-                     if rec.get('v', 0) >= RECHECK_MAX and rec.get('t', '') <= cutoff]
-    rotation_sample = random.sample(rotation_pool, max(0, int(len(rotation_pool) * ROTATION_RATE)))
-
-    todo_set = set(new_addrs)
-    todo = new_addrs[:]
-    for a in recheck:
-        if a not in todo_set:
-            todo.append(a); todo_set.add(a)
-    for a in rotation_sample:
-        if a not in todo_set:
-            todo.append(a); todo_set.add(a)
-
-    print(f'[merge] {len(new_addrs)} new / {len(recheck)} buffer-band / '
-          f'{len(rotation_sample)} rotation (eligible {len(rotation_pool)})', flush=True)
-    print(f'[equity] checking {len(todo)} addresses, concurrency {CONCURRENCY}', flush=True)
-
-    prog = {'n': 0}
-
-    def work(a):
-        try:
-            v = get_equity(a)
-        except Exception:
-            v = None
-        prog['n'] += 1
-        if prog['n'] % 200 == 0:
-            print(f'[equity] {prog["n"]}/{len(todo)}', flush=True)
-        return a, v
-
-    results = {}
-    if todo:
-        with ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
-            for a, v in ex.map(work, todo):
-                results[a] = v
-
-    ok = sum(1 for v in results.values() if v is not None)
-    failed = len(results) - ok
-    for a in new_addrs:
-        addresses[a] = {'fs': TODAY, 'ls': TODAY}
+    original = _read_state('addresses', {'addresses': {}})
+    addresses = original['addresses']
+    new_count = 0
     for a in harvested:
-        if a in addresses and isinstance(addresses[a], dict):
+        if a not in addresses:
+            addresses[a] = {'fs': TODAY, 'ls': TODAY}
+            new_count += 1
+        elif isinstance(addresses[a], dict):
             addresses[a]['ls'] = TODAY
-    for a, v in results.items():
-        if v is not None and v >= POOL_MIN:
-            accounts[a] = {'v': round(v, 2), 't': TODAY}
-        elif v is not None and a in accounts and v < POOL_MIN:
-            del accounts[a]
-
-    run_seconds = round(time.time() - t_start)
-    stats = {
-        'queried': len(todo), 'ok': ok, 'failed': failed,
-        'fail_rate': round(failed / len(todo), 4) if todo else 0,
-        'new_addresses': len(new_addrs), 'rechecks': len(recheck),
-        'captured': len(harvested), 'coins': len(coins),
-        'run_seconds': run_seconds,
-        'segments': hstats['segments'], 'segment_fails': hstats['segment_fails'],
-    }
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(addr_path, 'w') as f:
-        json.dump({'updated': TODAY, 'count': len(addresses), 'addresses': addresses}, f)
-    with open(acc_path, 'w') as f:
-        json.dump({'updated': TODAY, 'pool_min': POOL_MIN, 'count': len(accounts),
-                   'stats': stats, 'accounts': accounts}, f)
-    print(f'[done] addresses={len(addresses)} pool={len(accounts)} | '
-          f'查询 {len(todo)} 成功 {ok} 失败 {failed} ({stats["fail_rate"]*100:.1f}%) | '
-          f'{seg_note(hstats)} | {run_seconds}s', flush=True)
+        else:
+            addresses[a] = {'fs': addresses[a], 'ls': TODAY}
+    original.update(updated=TODAY, count=len(addresses), addresses=addresses)
+    _write_state('addresses', original)
+    # No account-value admission or random candidate sampling. Snapshot scans the
+    # entire candidate pool and a bounded, durable portion of the complete index.
+    accounts = _read_state('accounts', {'accounts': {}})['accounts']
+    queue = prepare(_read_state('position_recheck', None), addresses, accounts)
+    _write_state('position_recheck', queue)
+    print('[harvest] ' + json.dumps({'new_addresses': new_count, 'captured': len(harvested),
+          'coins': len(coins), 'run_seconds': round(time.time() - t_start),
+          **hstats, **progress(queue)}, ensure_ascii=False), flush=True)
 
 
 def seg_note(hstats):
@@ -340,146 +291,151 @@ def _positions_of(st):
 
 
 def _load_monitored_coins():
-    """读 data/coins.json 的监控币名单（收割端每6小时写入；含 xyz: 前缀股票，与快照仓位币名同口径）。
-
-    快照生成时只保留名单内币种的仓位——页面下拉框只有这些币，名单外仓位页面永远不渲染，
-    纯占体积（实测 42699 仓位过滤到 22738，gzip 1008KB→567KB）。读取失败返回 None（不过滤，安全兜底）。
-    """
-    try:
-        with open(os.path.join(DATA_DIR, 'coins.json')) as f:
-            return {c['n'] for c in json.load(f).get('coins', [])}
-    except Exception:
-        return None
+    """A readable monitored list is required: never publish unmonitored positions."""
+    with open(os.path.join(DATA_DIR, 'coins.json')) as f:
+        raw = json.load(f)
+    if raw.get('caliber') != 'avg_7d' or raw.get('threshold') != VOL_MIN:
+        raise ValueError('Invalid monitored coin rules')
+    return {c['n'] for c in raw['coins']}
 
 
-def snapshot_mode():
-    """方案B：对候选池全量双 dex 拉取，写 data/snapshot.json（页面打开秒渲染用）。
+def fetch_positions(addr, post, allowed):
+    # Read BOTH sides before interpreting equity; negative equity is a fact.
+    st = post({'type': 'clearinghouseState', 'user': addr})
+    sx = post({'type': 'clearinghouseState', 'user': addr, 'dex': 'xyz'})
+    for side in (st, sx):
+        if not isinstance(side, dict) or not isinstance(side.get('marginSummary'), dict) or not isinstance(side.get('assetPositions'), list):
+            raise ValueError('Incomplete clearinghouseState')
+    eq = float(st['marginSummary']['accountValue'])
+    if not math.isfinite(eq):
+        raise ValueError('Invalid accountValue')
+    positions = _positions_of(st) + _positions_of(sx)
+    kept = [p for p in positions if p[0] in allowed and math.isfinite(p[5]) and p[5] > POSITION_MIN]
+    return {'a': addr, 'e': round(eq, 2), 'p': kept}, len(positions)
 
-    - 账户值门槛用主 dex 的 accountValue（= 账户总值，含 xyz 子账户，实测口径）
-    - 仓位 = 主 dex + xyz builder dex 合并，且只保留监控名单内币种（coins.json 口径）
-    - 只保留快照时刻 ≥$10k 的账户（页面按时间戳标注新鲜度；要实时值用页面"拉取实时"按钮）
-    """
-    acc_path = os.path.join(DATA_DIR, 'accounts.json')
-    if not os.path.exists(acc_path):
-        print('[snapshot] accounts.json 不存在，跳过（等首次收割）', flush=True)
-        return
-    with open(acc_path) as f:
-        accounts = json.load(f).get('accounts', {})
-    pool = [a for a, rec in accounts.items() if rec.get('v', 0) >= SNAP_MIN]  # 用 SNAP_MIN($10k)，避免白查 $8k~$10k 缓冲带
+
+class PositionClient:
+    """One persistent connection per worker, existing six-worker pacing and retries."""
+    def __init__(self):
+        self.deadline = time.monotonic() + SCAN_SECONDS
+        self.local = threading.local()
+        self.connections = []
+        self.lock = threading.Lock()
+
+    def _connection(self):
+        c = getattr(self.local, 'conn', None)
+        if c is None:
+            c = http.client.HTTPSConnection('api.hyperliquid.xyz', 443, timeout=20)
+            self.local.conn = c
+            with self.lock:
+                self.connections.append(c)
+        return c
+
+    def post(self, payload):
+        c = self._connection()
+        c.request('POST', '/info', json.dumps(payload),
+                  {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'})
+        r = c.getresponse()
+        raw = r.read()
+        if r.status != 200:
+            raise IOError('HTTP ' + str(r.status))
+        return json.loads(raw)
+
+    def query(self, addr, allowed):
+        for attempt in range(3):
+            if time.monotonic() >= self.deadline:
+                return None, 0
+            try:
+                return fetch_positions(addr, self.post, allowed)
+            except Exception:
+                self._connection().close()
+                self.local.conn = None
+                if attempt < 2:
+                    time.sleep(attempt + 1)
+            finally:
+                time.sleep(SNAP_PACE)
+        return None, 0
+
+    def close(self):
+        for c in self.connections:
+            c.close()
+
+
+def snapshot_mode(query=None):
+    """All candidates plus <=400 rotating historical addresses; durable retry on either dex failure."""
+    allowed = _load_monitored_coins()
+    addresses = _read_state('addresses', {'addresses': {}})['addresses']
+    original = _read_state('accounts', {'accounts': {}})
+    accounts = original['accounts']
+    queue = prepare(_read_state('position_recheck', None), addresses, accounts)
+    batch, start, end = plan(queue)
+    # SNAP_LIMIT never advances unseen work: it is a diagnostic-only bounded scan.
+    candidates = list(accounts)
+    candidate_offset = queue.get('candidate_cursor', 0) % max(1, len(candidates))
+    rotated = candidates[candidate_offset:] + candidates[:candidate_offset]
+    pool = list(dict.fromkeys(batch + rotated))
     if SNAP_LIMIT:
         pool = pool[:SNAP_LIMIT]
-    allowed = _load_monitored_coins()
-    if allowed is None:
-        print('[snapshot] ⚠️ data/coins.json 不可读，本快照不过滤仓位（体积偏大）', flush=True)
-    print(f'[snapshot] 候选池 {len(pool)} 个地址，双dex全量拉取，并发 {SNAP_CONCURRENCY}'
-          f'{"" if allowed is None else f"，仓位过滤至监控名单 {len(allowed)} 币"}', flush=True)
-
-    prog = {'n': 0}
-    cnt = {'ok': 0, 'below': 0, 'fail': 0}
-    bad = {'sample': None}
-
-    def _new_conn():
-        return http.client.HTTPSConnection('api.hyperliquid.xyz', 443, timeout=20)
-
-    def worker(chunk):
-        """每 worker 一条长连接跑完自己的地址块——urllib 每请求新建连接会被 HL 掐（实测52%失败）"""
-        box = {'conn': _new_conn()}
-        res = []
-        pstat = [0, 0]  # [过滤前仓位数, 过滤后保留数]
-
-        def post(payload):
-            c = box['conn']
-            c.request('POST', '/info', json.dumps(payload),
-                      {'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'})
-            r = c.getresponse()
-            raw = r.read()
-            if r.status != 200:
-                raise IOError(f'HTTP {r.status}')
-            return json.loads(raw)
-
-        def reconnect():
-            try:
-                box['conn'].close()
-            except Exception:
-                pass
-            box['conn'] = _new_conn()
-
-        for a in chunk:
-            rec = ('fail', None)
-            for attempt in range(3):
-                try:
-                    st = post({'type': 'clearinghouseState', 'user': a})
-                    if 'marginSummary' not in st:
-                        bad['sample'] = 'missing marginSummary'
-                        raise ValueError('响应缺 marginSummary（软失败）')
-                    eq = float(st['marginSummary']['accountValue'])
-                    if eq < 10000:
-                        rec = ('below', None)
-                        break
-                    pos = _positions_of(st)
-                    try:
-                        sx = post({'type': 'clearinghouseState', 'user': a, 'dex': 'xyz'})
-                        if 'assetPositions' in sx:
-                            pos.extend(_positions_of(sx))
-                    except Exception:
-                        reconnect()  # xyz 拉挂不丢主 dex 数据，但要换条干净连接
-                    if allowed:
-                        pstat[0] += len(pos)
-                        pos = [t for t in pos if t[0] in allowed]
-                        pstat[1] += len(pos)
-                    rec = ('ok', {'a': a, 'e': round(eq, 2), 'p': pos})
-                    break
-                except Exception:
-                    reconnect()
-                    if attempt == 2:
-                        rec = ('fail', None)
-                    else:
-                        time.sleep(1.0 * (attempt + 1))
-            res.append(rec)
-            prog['n'] += 1
-            if prog['n'] % 200 == 0:
-                print(f'[snapshot] {prog["n"]}/{len(pool)}', flush=True)
-            time.sleep(SNAP_PACE)  # 全局 pacing：6 worker × 2请求 ÷ (请求时延+0.35s) ≈ 22 请求/秒
-        try:
-            box['conn'].close()
-        except Exception:
-            pass
-        return res, pstat[0], pstat[1]
-
-    out = []
-    pos_total = pos_kept = 0
     t0 = time.time()
-    if pool:
-        chunks = [pool[i::SNAP_CONCURRENCY] for i in range(SNAP_CONCURRENCY)]
+    client = PositionClient() if query is None else None
+    run_query = query or client.query
+    out, results = [], {}
+    stats = {'ok': 0, 'empty': 0, 'failed': 0, 'pos_total': 0, 'pos_kept': 0}
+    print('[snapshot] ' + json.dumps({'candidates': len(accounts), 'scheduled': len(pool),
+          'concurrency': SNAP_CONCURRENCY, **progress(queue)}, ensure_ascii=False), flush=True)
+    try:
+        deadline = time.monotonic() + SCAN_SECONDS
         with ThreadPoolExecutor(max_workers=SNAP_CONCURRENCY) as ex:
-            for res, pt, pk in ex.map(worker, chunks):
-                pos_total += pt
-                pos_kept += pk
-                for tag, rec in res:
-                    cnt[tag] += 1
-                    if rec:
+            for offset in range(0, len(pool), 60):
+                if time.monotonic() >= deadline:
+                    break
+                chunk = pool[offset:offset + 60]
+                for a, (rec, total) in zip(chunk, ex.map(lambda a: run_query(a, allowed), chunk)):
+                    results[a] = rec
+                    stats['pos_total'] += total
+                    if rec is None:
+                        stats['failed'] += 1  # Keep existing candidate; do not equate failure to empty.
+                    elif rec['p']:
+                        accounts[a] = {'v': rec['e'], 't': TODAY}
                         out.append(rec)
-
-    snap = {
-        'ts': time.strftime('%Y-%m-%dT%H:%M:%S+08:00', time.gmtime(time.time() + 8 * 3600)),
-        'generated_at_unix': int(time.time()),
-        'pool_scanned': len(pool),
-        'pool_min': POOL_MIN,
-        'stats': {'ok': cnt['ok'], 'below': cnt['below'], 'failed': cnt['fail'],
-                  'pos_total': pos_total, 'pos_kept': pos_kept},
-        'accounts': out,
-    }
-    snap_path = os.path.join(DATA_DIR, 'snapshot.json')
-    with open(snap_path, 'w') as f:
-        json.dump(snap, f, separators=(',', ':'))  # 紧凑格式省体积
-    size = os.path.getsize(snap_path)
-    flt = f' · 仓位过滤 {pos_kept}/{pos_total} ({pos_kept * 100 // pos_total if pos_total else 100}%)' if allowed else ''
-    print(f'[snapshot] 完成：≥$10k 账户 {len(out)} 个（ok {cnt["ok"]} / 低于门槛 {cnt["below"]} / '
-          f'失败 {cnt["fail"]}）{flt} · 文件 {size // 1024}KB · 耗时 {round(time.time() - t0)}s', flush=True)
-    if bad['sample']:
-        print(f'[snapshot] 异常响应样本: {bad["sample"]}', flush=True)
-    if cnt['fail'] > len(pool) * 0.05:
-        print(f'[snapshot] ⚠️ 失败率 {cnt["fail"]/len(pool)*100:.0f}% 偏高，疑似被限流，下次考虑再降并发/加大 pacing', flush=True)
+                        stats['ok'] += 1
+                        stats['pos_kept'] += len(rec['p'])
+                    else:
+                        accounts.pop(a, None)  # Index/queue retain the address for future discovery.
+                        stats['empty'] += 1
+                    if len(results) % 200 == 0:
+                        print(f'[snapshot] {len(results)}/{len(pool)}', flush=True)
+    finally:
+        if client:
+            client.close()
+    stats['unqueried'] = len(pool) - len(results)
+    # Candidate facts first, cursor last. An interruption replays the batch.
+    original.pop('pool_min', None)
+    original.update(updated=TODAY, count=len(accounts), selection=SELECTION, accounts=accounts)
+    _write_state('accounts', original)
+    # A diagnostic limit must not skip the unqueried part of the forward batch.
+    actual_end = start
+    while actual_end < end and queue['order'][actual_end] in results:
+        actual_end += 1
+    finish(queue, start, actual_end, results)
+    # Rotate the starting point if a degraded API exhausts the time budget.
+    checked = 0
+    for a in rotated:
+        if a not in results:
+            break
+        checked += 1
+    queue['candidate_cursor'] = (candidate_offset + checked) % max(1, len(candidates))
+    elapsed = time.time() - t0
+    queue['last_run'] = {'queried': len(results), 'failed': stats['failed'],
+                         'seconds': round(elapsed, 3), 'completed_at_unix': int(time.time())}
+    snap = {'ts': time.strftime('%Y-%m-%dT%H:%M:%S+08:00', time.gmtime(time.time() + 8 * 3600)),
+            'generated_at_unix': int(time.time()), 'pool_scanned': len(results),
+            'selection': SELECTION, 'stats': stats, 'accounts': out}
+    _write_state('snapshot', snap)
+    _write_state('position_recheck', queue)
+    print('[snapshot] ' + json.dumps({**stats, **progress(queue), 'queried': len(results),
+          'seconds': round(elapsed, 3)}, ensure_ascii=False), flush=True)
+    return snap
 
 
 if __name__ == '__main__':

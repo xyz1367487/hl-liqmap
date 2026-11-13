@@ -5,14 +5,14 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from aggregate import EDGES, aggregate, validate_public
+from aggregate import EDGES, aggregate, aggregate_v1, validate_public
 
 ROOT = Path(__file__).resolve().parents[1]
 COINS = {'updated': '2026-11-10', 'coins': [{'n': 'BTC', 'v': 6000000}]}
 
 
 def account(identity, positions):
-    return {'a': identity, 'e': 10000, 'p': [['BTC', side, 1, 100, px, n, 5, 'cross'] for side, px, n in positions]}
+    return {'a': identity, 'e': 10000, 'p': [['BTC', side, 1, 100, px, n * 10000, 5, 'cross'] for side, px, n in positions]}
 
 
 def original_js(rows, mark, side):
@@ -34,8 +34,8 @@ class AggregateTests(unittest.TestCase):
                     px = 1 + d  # Original code buckets by absolute distance for either side.
                     for contributor in range(3):
                         accounts.append(account(f'private-{contributor}', [(side, px, (i + 1) * 100)]))
-                        rows[side].append({'liqPx': px, 'n': (i + 1) * 100})
-        output = aggregate({'accounts': accounts, 'generated_at_unix': 1}, {'BTC': 1}, COINS)
+                        rows[side].append({'liqPx': px, 'n': (i + 1) * 100 * 10000})
+        output = aggregate_v1({'accounts': accounts, 'generated_at_unix': 1}, {'BTC': 1}, COINS)
         for side in ('L', 'S'):
             expected = original_js(rows[side], 1, side)
             actual = output['markets']['BTC']['buckets']
@@ -54,12 +54,13 @@ class AggregateTests(unittest.TestCase):
         output = aggregate(sample, {'BTC': 100}, COINS)
         buckets = output['markets']['BTC']['buckets']
         self.assertEqual([(b['side'], b['notional'], b['positions']) for b in buckets],
-                         [('L', 666, 5), ('S', 7, 1)])
+                         [('L', 6660000, 5), ('S', 70000, 1)])
         self.assertEqual(validate_public(output), output)
         sample['accounts'].append(account('three', [('L', 95, 333), ('S', 0, 999)]))
-        self.assertEqual(aggregate(sample, {'BTC': 100}, COINS)['markets']['BTC']['buckets'][0]['notional'], 999)
+        self.assertEqual(aggregate(sample, {'BTC': 100}, COINS)['markets']['BTC']['buckets'][0]['notional'], 9990000)
         sample['accounts'][-1]['e'] = 9999
-        self.assertEqual(aggregate(sample, {'BTC': 100}, COINS), output)
+        output = aggregate(sample, {'BTC': 100}, COINS)
+        self.assertEqual(output['markets']['BTC']['buckets'][0]['notional'], 9990000)
         self.assertNotIn('"one"', json.dumps(output))
         # Identity is not needed to produce public buckets.
         for row in sample['accounts']:

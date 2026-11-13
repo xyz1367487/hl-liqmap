@@ -1,3 +1,13 @@
+## 2026-11-13 本轮增量白名单（仅主线程部署）
+
+本节取代以下历史上传清单。本地public/private目录是远端main最新源码的独立实施副本，不可整目录上传。本轮不上传任何state、snapshots、evidence、日志、baseline或真实样本，不重跑初始化，不新增Secrets/服务，不修改调度，不删除文件/历史。本次由主线程先部署公开读旧新前端及同步验证器，核验后再部署私有模块，等待既定自动触发。
+
+公开相对路径：`.github/workflows/checks.yml`、`README.md`、`MIGRATION.md`、`VERIFICATION.md`、`UPLOAD_CHECKLIST.md`、`aggregate.py`、`chart-core.js`、`harvest.py`、`index.html`、`position_scan.py`、`private_export.py`、`tests/test_aggregate.py`、`tests/test_position_selection.py`、`tests/aggregate-loading.test.cjs`、`tests/chart-core.test.cjs`、`tests/lev-stack.test.cjs`、`tests/load-core.cjs`。
+
+私有相对路径：`README.md`、`aggregate.py`、`harvest.py`、`position_scan.py`、`private_export.py`、`tests/test_position_selection.py`。其他文件与基线一致，不需上传；生产`chart-ui.js`及`chart.css`原样保留。队列state由私有任务在现存state内生成，随当前workflow自动回写；不要用本地旧state覆盖线上state。
+
+部署前再次读取两个main和活动workflow，基于最新main合并这些代码，保留线上新增state与已有功能；变更collect.yml不在本轮白名单内。本地逐文件SHA256由交接根REVIEW_MANIFEST.json及UPLOAD_SHA256.txt给出，仅作为主线程审查材料，不上传公开。
+
 # MCP 上传清单（分阶段记录；public index 尚未切换）
 
 2026-11-11 北京时间（UTC+08:00）更新：本轮仅整理本地文档，不执行上传、push、dispatch、删除或历史改写。旧公开任务已 guard，不再定时写入；新私有任务每6小时收割、每30分钟快照并导出，首次私有 state 回写已成功。单仓库 deploy key 自动发布 aggregate 的实现已交付，真实 SSH 发布结果仍待主线程核验；public index 尚未切换，后续主线程确认时再改状态。旧公开 data/ 和 snap 仍可访问，历史未重写，不能称全流程上线已成功。

@@ -1,3 +1,13 @@
+## 2026-11-13 单仓位口径实施（本地待部署）
+
+本节是此次变更的当前说明，后续旧阶段记录保留追溯。单个仓位最终准入为 `abs(positionValue) > 5000` 美元，严格大于，5000 排除、5000.01 纳入；取消候选池、snapshot 预查/实时查询、所有 aggregate 路径的账户权益准入。低权益大仓会新增，大账户小仓会移除；两笔各3000不合并准入。不增加杠杆、匿名或账户合计门槛。主 dex 与 xyz 均查询，主 dex 低权益不短路 xyz；响应完整性失败可重试，不能当空仓删除候选。私有快照 `e` 保留事实；`p` 仅含当前 monitored coin 的合格仓位。币种 `avg_7d > $5M` 与有效强平价图示规则保留。
+
+公开 schema 1/2/3 兼容增加最小可选 `selection`：`{"unit":"position_notional_usd","operator":"gt","threshold":5000,"account_equity_min":null}`。Python/JS/发布验证器均严格校验该对象；无此字段的旧快照仍显示“旧快照：账户总值 ≥ $10,000”，不能冒称新口径。新 exporter 拒绝无新标记的私有 snapshot；聚合函数对无标记输入不补标记。杠杆分档、未知字段退化、原累计算法、网络 fallback、拖动和 fixed tooltip 保留。
+
+历史地址通过 `position_scan.py` 持久化全索引轮转；每次 snapshot 最多400个历史任务，其中失败重试最多100，同时复查全部现存候选，不再按旧权益随机抽取。`state/position_recheck.json` 和 `.backup.json` 随既有 `git add -- state/` 保存；原完整 addresses 索引及 fs/ls 保留，退出候选后仍可轮转再发现。失败地址进入可轮转重试队列，checkpoint 损坏回退备份或完整重放。20分钟停止新增工作，保留未完成候选及游标；这不是强制整个 workflow 20分钟结束，最后已发请求/导出还有耗时。
+
+先部署可读旧新口径的公开前端及同步校验器，再部署私有采集/队列/导出；仅等待既定调度，本轮未推送、未手动触发、未删除任何文件。不上传真实地址、私有 state、原始样本、日志或本地 evidence。新口径标记说明筛选规则，不代表历史补查已完成；进度以私有 checkpoint/log 的 indexed、cursor、cycles、retry_pending、remaining_in_pass、estimated_runs、last_run 为准。
+
 # HL 清算地图（hl-liqmap）
 
 静态前端 + 私有采集 + 公开聚合快照。新版价格横轴图已上线：公开 main 提交 `f45c0b918cdf823ac2b66b7908cc009d28a7e63d`（北京时间 2026-11-11 16:11:17），代码检查 `42985052846` 与 Pages 部署 `42985052777` 均 completed/success。线上地址：https://xyz1367487.github.io/hl-liqmap/ 。

@@ -99,6 +99,7 @@
     <div class="legend chart-legend"><span><i class="key long"></i>多头潜在强平</span><span><i class="key short"></i>空头潜在强平</span><span><i class="key line long"></i>累计多头 · 右轴</span><span><i class="key line short"></i>累计空头 · 右轴</span><span><i class="key current"></i>最新行情价</span><span><i class="key reference"></i>分桶参考价</span><span id="estLegend" hidden>虚线柱：假设估算 · 不计入累计</span></div>
     <div class="lev-legend" id="levLegend" hidden role="group" aria-label="杠杆档图例，可点击切换显示"></div>
     <div id="freshness" role="status"></div>
+    <div id="selectionCaliber" role="status">筛选口径：等待有效快照</div>
     <div id="chartFrame"><svg id="priceChart" viewBox="0 0 1120 520" role="img" aria-label="潜在强平名义金额价格分布与累计曲线"></svg><div id="chartTooltip" role="status" hidden></div></div>
     <div id="chartNote" class="prog"></div>
     <div id="viewSummary" class="prog"></div>
@@ -133,7 +134,8 @@
     · 新版固定网格为快照参考价的 0.05%，直接从私有原始仓位分桶，区间左闭右开；分辨率只合并已有细桶，不拆分。桶参考价不随实时行情变化。旧 schema1 的14档按原始价格极值区间完整显示，无法还原区间内分布。<br>
     · 两条累计曲线只计真实层：多头从最新行情价向低价、空头向高价累加，到完整桶远端极值才计入金额。跨现价桶无法精确拆分，单列待定位金额；方向已越过现价的桶仍保留，不推断已成交或已爆仓。累计不随视窗重置。<br>
     · Watchlist 地址仅保存在本机并直连公开 API；与公开聚合独立切换，避免重复计数。估算层为 OI × 杠杆权重 × 多空假设，以虚线美元柱表示，不计入真实累计。未计维持保证金分档、手续费和全仓权益。<br>
-    · 私有侧按账户总值 ≥ $10k、主 dex + xyz 与 avg_7d > $5M 名单筛选，每6小时收割、每30分钟快照；调度可能延迟，超过2小时提示过期。索引非字面全网，无有效强平价不上图。<br>
+    · 新口径按单个仓位美元名义 abs(positionValue) > $5,000（严格大于）筛选，无账户权益门槛；两笔 $3,000 不合并准入。低权益大仓会新增，大账户小仓会移除。主 dex + xyz、avg_7d > $5M 名单及有效强平价上图规则保留。每6小时收割、每30分钟快照并分批轮转历史地址；首轮补查完成后继续轮转，索引非字面全网。调度可能延迟，超过2小时提示过期。<br>
+    · 当前数据口径以快照显式 metadata 为准；缺少该标记的旧快照仍标为账户 ≥ $10k，不能视为历史地址已按新口径补查。<br>
     · 所有非空聚合桶（含单人贡献桶）公开，不增加贡献人数门槛。公开无地址和逐账户记录，但价格极值、金额和跨期变化可能被关联推断，不保证绝对匿名。
   </div>
 </div>
@@ -335,6 +337,7 @@ function aggregateEmptyText(){
   return aggregateSnapshot?'该币暂无真实聚合桶':aggregateState==='loading'?'正在加载聚合快照':aggregateState==='error'?'聚合读取失败，请点击聚合快照按钮重试':'聚合快照尚未加载';
 }
 function renderAggregateSummary(){
+  $('selectionCaliber').textContent=aggregateSnapshot?LiqChart.selectionLabel(aggregateSnapshot):'筛选口径：等待有效快照';
   if(!aggregateSnapshot){
     $('netMeta').textContent=aggregateEmptyText();
     $('netTable').textContent='';
@@ -343,7 +346,7 @@ function renderAggregateSummary(){
   const m=aggregateSnapshot.markets[cur?.name];
   const total=side=>(m?.buckets||[]).filter(b=>b.side===side).reduce((n,b)=>n+b.notional,0);
   const age=Math.max(0,Math.round((Date.now()/1000-aggregateSnapshot.generated_at_unix)/60));
-  $('netMeta').textContent='数据源 '+aggregateSource+' · 聚合生成于 '+new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN')+' · '+age+'分钟前'+(age>120?' · ⚠️快照已停滞超过2小时':'');
+  $('netMeta').textContent='数据源 '+aggregateSource+' · 聚合生成于 '+new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN')+' · '+age+'分钟前 · '+LiqChart.selectionLabel(aggregateSnapshot)+(age>120?' · ⚠️快照已停滞超过2小时':'');
   $('netTable').textContent=cur?(m ? cur.name+' · 分桶参考价 $'+fmtPx(m.reference_mark)+' · 全部非空桶名义：多 $'+fmtUSD(total('L'))+' / 空 $'+fmtUSD(total('S')) : '该币暂无真实聚合桶'):'';
 }
 async function readAggregateSource(source,timeoutMs=12000){
