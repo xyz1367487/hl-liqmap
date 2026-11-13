@@ -73,63 +73,62 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+<main class="wrap">
   <h1>HL 清算地图<span class="badge">潜在强平分布</span></h1>
-  <div class="sub">Hyperliquid 公开 API · 主 dex + xyz 双 dex · 币种口径：<span id="coinCaliber">avg_7d > $5M</span> · 估算层(假设驱动) + 真实层(本机 Watchlist / 公开聚合) · <span id="status">加载中…</span></div>
+  <div class="sub">Hyperliquid · 主 dex + xyz · <span id="coinCaliber">avg_7d > $5M</span> · <span id="status">加载中…</span></div>
   <div class="err" id="err"></div>
 
   <div class="card">
-    <div class="ctl">
-      <select id="coin"></select>
-      <label class="chk"><input type="checkbox" id="estToggle"> 显示估算层</label>
-      <label class="chk" title="仅作用于估算层的多空拆分假设"><input type="range" id="ls" min="20" max="80" value="50" style="width:100px"> 多空假设 <span id="lsLabel">50/50</span></label>
-      <label class="chk"><input type="checkbox" id="auto" checked> 10秒自动刷新</label>
-      <button id="refresh">手动刷新</button>
+    <div class="ctl main-toolbar">
+      <label for="coin">币种</label><select id="coin" aria-label="币种"></select>
+      <label for="span">窗口</label><select id="span"><option value="0.02">±2%</option><option value="0.08" selected>±8%</option><option value="0.25">±25%</option><option value="0.5">±50%</option><option value="1">±100%</option></select>
+      <label for="resolution">分辨率</label><select id="resolution"><option value="1">5bp</option><option value="2">10bp</option><option value="5">25bp</option><option value="10">50bp</option></select>
+      <label for="source">来源</label><select id="source"><option value="aggregate">公开聚合</option><option value="watchlist">本机 Watchlist</option></select>
+      <label class="chk"><input type="checkbox" id="auto" checked> 10秒行情</label>
+      <button id="refresh">刷新行情</button><button id="netBtn">刷新快照</button>
     </div>
-    <div class="ctx" id="ctx" style="margin-top:10px"></div>
-    <div class="chart-controls">
-      <label>数据源 <select id="source"><option value="aggregate">公开聚合</option><option value="watchlist">本机 Watchlist（独立）</option></select></label>
-      <label>价格窗口 <select id="span"><option value="0.02">±2%</option><option value="0.08" selected>±8%</option><option value="0.25">±25%</option><option value="0.5">±50%</option><option value="1">±100%</option></select></label>
-      <label>分辨率 <select id="resolution"><option value="1">5bp · 0.05%</option><option value="2">10bp · 0.1%</option><option value="5">25bp · 0.25%</option><option value="10">50bp · 0.5%</option></select></label>
-      <button id="zoomIn" aria-label="放大价格范围">＋ 放大</button><button id="zoomOut" aria-label="缩小价格范围">− 缩小</button><button id="resetView">重置范围</button>
-      <label>下限 $ <input id="priceMin" type="number" min="0" step="any" aria-label="价格下限"></label>
-      <label>上限 $ <input id="priceMax" type="number" min="0" step="any" aria-label="价格上限"></label><button id="applyRange">应用</button>
-    </div>
+    <div class="ctx" id="ctx"></div>
     <div class="chart-heading"><div><h2 id="chartTitle">潜在强平名义金额</h2><div id="chartSubtitle" class="prog"></div></div><div id="chartTotal"></div></div>
-    <div class="legend chart-legend"><span><i class="key long"></i>多头潜在强平</span><span><i class="key short"></i>空头潜在强平</span><span><i class="key line long"></i>累计多头 · 右轴</span><span><i class="key line short"></i>累计空头 · 右轴</span><span><i class="key current"></i>最新行情价</span><span><i class="key reference"></i>分桶参考价</span><span id="estLegend" hidden>虚线柱：假设估算 · 不计入累计</span></div>
+    <div class="legend chart-legend">
+      <span><i class="key neutral"></i>柱：真实杠杆档 / 未拆分灰柱</span>
+      <button type="button" data-series="L" aria-pressed="true"><i class="key line long"></i>累计多头 · 右轴</button>
+      <button type="button" data-series="S" aria-pressed="true"><i class="key line short"></i>累计空头 · 右轴</button>
+      <span><i class="key current"></i>最新行情价</span><span><i class="key reference"></i>分桶参考价</span><span id="estLegend" hidden>虚线：假设估算，不计累计</span>
+    </div>
     <div class="lev-legend" id="levLegend" hidden role="group" aria-label="杠杆档图例，可点击切换显示"></div>
     <div id="freshness" role="status"></div>
     <div id="selectionCaliber" role="status">筛选口径：等待有效快照</div>
-    <div id="chartFrame"><svg id="priceChart" viewBox="0 0 1120 520" role="img" aria-label="潜在强平名义金额价格分布与累计曲线"></svg><div id="chartTooltip" role="status" hidden></div></div>
-    <div id="chartNote" class="prog"></div>
-    <div id="viewSummary" class="prog"></div>
-    <div class="chart-help">价格横轴与两条美元纵轴均为线性。悬停、触摸或聚焦柱体查看区间；滚轮缩放，方向键切换柱体。缩放仅裁切视窗，累计始终从最新行情价向同侧远端累加。</div>
+    <div class="prog" id="netProg" role="status"></div>
+    <div id="chartFrame"><svg id="priceChart" viewBox="0 0 1120 440" tabindex="0" role="img" aria-label="潜在强平分布。左右方向键定位价格，Enter固定读数，Escape关闭" aria-describedby="chartHelp"></svg></div>
+    <div id="chartTooltip" role="region" aria-label="价格定位读数" hidden>
+      <button type="button" id="closeTooltip" aria-label="关闭定位读数">关闭 ×</button>
+      <div id="tipSummary"></div><details id="tipDetails"><summary>详情 · 杠杆与累计口径</summary><div id="tipLong"></div></details>
+    </div>
+    <div class="navigator" id="navigator" aria-label="全价格分布范围">
+      <svg id="overview" viewBox="0 0 1000 48" aria-hidden="true"></svg>
+      <button type="button" id="navSelection" aria-label="整体平移价格选区，左右键调整，Home或End移至边界"></button>
+      <button type="button" id="navLow" role="slider" aria-label="价格范围下限" aria-orientation="horizontal"></button>
+      <button type="button" id="navHigh" role="slider" aria-label="价格范围上限" aria-orientation="horizontal"></button>
+    </div>
+    <div class="range-caption"><span id="navBounds"></span><div><button id="zoomIn" aria-label="放大价格范围">＋</button><button id="zoomOut" aria-label="缩小价格范围">−</button><button id="resetView">重置范围</button></div></div>
+    <div class="chart-help" id="chartHelp">拖动主图或范围条平移 · Ctrl/⌘ + 滚轮缩放 · 方向键定位价格，Enter固定读数。累计开关仅隐藏图层，双轴金额口径不变。</div>
+    <details class="secondary"><summary>手填价格范围</summary><div class="chart-controls"><label for="priceMin">下限 USD</label><input id="priceMin" type="number" min="0" step="any"><label for="priceMax">上限 USD</label><input id="priceMax" type="number" min="0" step="any"><button id="applyRange">应用</button></div></details>
+    <details class="secondary"><summary>估算参数</summary><div class="ctl"><label class="chk"><input type="checkbox" id="estToggle"> 显示估算层</label><label class="chk"><input type="range" id="ls" min="20" max="80" value="50"> 多空假设 <span id="lsLabel">50/50</span></label></div></details>
+    <details class="secondary"><summary>分布与累计说明</summary><div id="chartNote" class="prog"></div><div id="viewSummary" class="prog"></div><div id="netMeta" class="prog"></div><div id="netTable"></div></details>
   </div>
 
-  <div class="card">
+  <details class="card secondary"><summary>Watchlist · 本机独立数据源</summary>
     <div class="sec" style="margin-top:0">Watchlist 真实仓位 <span class="mark">粘贴 0x 地址（每行一个，仅存本机浏览器）· 拉取链上 clearinghouseState（主 dex + xyz 双 dex），强平价为接口原值</span></div>
-    <textarea id="wl" placeholder="0x......&#10;0x......"></textarea>
+    <label for="wl">本机地址（每行一个）</label><textarea id="wl" placeholder="0x......&#10;0x......"></textarea>
     <div class="ctl" style="margin-top:8px">
       <button id="wlBtn" class="primary">拉取真实仓位</button>
       <button id="wlClear">清空</button>
       <span class="prog" id="wlProg"></span>
     </div>
     <div id="wlTable"></div>
-  </div>
+  </details>
 
-  <div class="card">
-    <div class="sec" style="margin-top:0">已发现账户的聚合地图 <span class="mark">私有端分桶，公开端仅读取聚合结果</span></div>
-    <div class="ctl">
-      <button id="netBtn" class="primary">刷新聚合快照</button>
-      <span class="prog" id="netProg"></span>
-      <span class="prog" id="netMeta"></span>
-    </div>
-    <div class="prog" style="margin-top:6px">固定参考价分桶，公开全部非空桶（含单人贡献桶）。行情每10秒更新，不重分真实桶；支持旧版14档与新版细价格网格平滑过渡。</div>
-    <div id="netTable"></div>
-  </div>
-
-  <div class="foot">
-    <b>口径与边界</b><br>
+  <details class="foot secondary"><summary>口径与边界</summary>
     · 本图是仓位潜在强平名义分布，不是已爆仓事件；数据仅来自 Hyperliquid 主 dex 与 xyz，无多交易所推算。账户筛选和币种口径沿用原采集规则。<br>
     · 新版固定网格为快照参考价的 0.05%，直接从私有原始仓位分桶，区间左闭右开；分辨率只合并已有细桶，不拆分。桶参考价不随实时行情变化。旧 schema1 的14档按原始价格极值区间完整显示，无法还原区间内分布。<br>
     · 两条累计曲线只计真实层：多头从最新行情价向低价、空头向高价累加，到完整桶远端极值才计入金额。跨现价桶无法精确拆分，单列待定位金额；方向已越过现价的桶仍保留，不推断已成交或已爆仓。累计不随视窗重置。<br>
@@ -137,8 +136,8 @@
     · 新口径按单个仓位美元名义 abs(positionValue) > $5,000（严格大于）筛选，无账户权益门槛；两笔 $3,000 不合并准入。低权益大仓会新增，大账户小仓会移除。主 dex + xyz、avg_7d > $5M 名单及有效强平价上图规则保留。每6小时收割、每30分钟快照并分批轮转历史地址；首轮补查完成后继续轮转，索引非字面全网。调度可能延迟，超过2小时提示过期。<br>
     · 当前数据口径以快照显式 metadata 为准；缺少该标记的旧快照仍标为账户 ≥ $10k，不能视为历史地址已按新口径补查。<br>
     · 所有非空聚合桶（含单人贡献桶）公开，不增加贡献人数门槛。公开无地址和逐账户记录，但价格极值、金额和跨期变化可能被关联推断，不保证绝对匿名。
-  </div>
-</div>
+  </details>
+</main>
 
 <script src="chart-core.js"></script>
 <script src="chart-ui.js"></script>

@@ -168,7 +168,7 @@ test('累计渐变填充存在、位于柱体之下且不改变累计数值或�
   const ui=fs.readFileSync(__dirname+'/../chart-ui.js','utf8');
   assert.match(ui,/class="curve-fill" data-fill="\$\{side\}"/);
   assert.match(ui,/linearGradient id="fill\$\{side\}"/);
-  assert.match(ui,/stop-opacity="\.26"/);
+  assert.match(ui,/stop-opacity="\.09"/);
   // Fills are emitted before the bar loop, so bars paint on top.
   assert.ok(ui.indexOf('data-fill=')<ui.indexOf('visible.forEach((b,i)=>'));
   // The area path reuses the cumulative points verbatim; only the baseline is added.

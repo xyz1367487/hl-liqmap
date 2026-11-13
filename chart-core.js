@@ -129,7 +129,24 @@
     if(!(domain[1]>domain[0])) throw Error('无效坐标范围');
     return value=>range[0]+(value-domain[0])/(domain[1]-domain[0])*(range[1]-range[0]);
   }
-  const api={FRACTION,LEV_LIMITS,LEV_LABELS,LEV_COUNT,levBand,levSum,gridIndex,validate,selectionLabel,normalize,coarsen,localBuckets,cumulative,linear};
+  // Locate the displayed cell, never the nearest occupied bar. Legacy intervals stay intact.
+  function hitPrice(rows,price,step,factor,legacy=false){
+    if(!Number.isFinite(price)||price<0) return {rows:[],interval:null};
+    if(legacy) return {rows:rows.filter(b=>price>=b.lo&&price<=b.hi),interval:null};
+    const index=gridIndex(price,step*factor);
+    return {rows:rows.filter(b=>b.index===index),interval:[index*step*factor,(index+1)*step*factor]};
+  }
+  function overviewDomain(rows,mark,view){
+    let lo=Math.min(mark,view[0]),hi=Math.max(mark,view[1]);
+    for(const b of rows){lo=Math.min(lo,b.lo);hi=Math.max(hi,b.hi);}
+    return [Math.max(0,lo),Math.max(hi,lo+Math.max(mark*.0005,Number.EPSILON))];
+  }
+  function moveRange(view,delta,domain=[0,Infinity]){
+    const width=view[1]-view[0];
+    const lo=Math.max(domain[0],Math.min(domain[1]-width,view[0]+delta));
+    return [lo,lo+width];
+  }
+  const api={hitPrice,overviewDomain,moveRange,FRACTION,LEV_LIMITS,LEV_LABELS,LEV_COUNT,levBand,levSum,gridIndex,validate,selectionLabel,normalize,coarsen,localBuckets,cumulative,linear};
   if(typeof module!=='undefined'&&module.exports) module.exports=api;
   root.LiqChart=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
