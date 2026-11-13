@@ -4,7 +4,7 @@ import math
 POSITION_MIN = 5000
 SELECTION = {'unit': 'position_notional_usd', 'operator': 'gt', 'threshold': POSITION_MIN,
              'account_equity_min': None}
-BATCH_SIZE = 400
+BATCH_SIZE = 2000
 RETRY_SIZE = 100
 
 

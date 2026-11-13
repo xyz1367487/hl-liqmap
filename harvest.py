@@ -362,7 +362,7 @@ class PositionClient:
 
 
 def snapshot_mode(query=None):
-    """All candidates plus <=400 rotating historical addresses; durable retry on either dex failure."""
+    """Candidates first, then <=2000 historical tasks including <=100 retries."""
     allowed = _load_monitored_coins()
     addresses = _read_state('addresses', {'addresses': {}})['addresses']
     original = _read_state('accounts', {'accounts': {}})
@@ -373,7 +373,7 @@ def snapshot_mode(query=None):
     candidates = list(accounts)
     candidate_offset = queue.get('candidate_cursor', 0) % max(1, len(candidates))
     rotated = candidates[candidate_offset:] + candidates[:candidate_offset]
-    pool = list(dict.fromkeys(batch + rotated))
+    pool = list(dict.fromkeys(rotated + batch))
     if SNAP_LIMIT:
         pool = pool[:SNAP_LIMIT]
     t0 = time.time()
@@ -386,10 +386,14 @@ def snapshot_mode(query=None):
     try:
         deadline = time.monotonic() + SCAN_SECONDS
         with ThreadPoolExecutor(max_workers=SNAP_CONCURRENCY) as ex:
-            for offset in range(0, len(pool), 60):
+            # Drain candidate work before submitting any historical-only work.
+            boundary = min(len(rotated), len(pool))
+            chunks = (pool[offset:min(offset + 60, stop)]
+                      for first, stop in ((0, boundary), (boundary, len(pool)))
+                      for offset in range(first, stop, 60))
+            for chunk in chunks:
                 if time.monotonic() >= deadline:
                     break
-                chunk = pool[offset:offset + 60]
                 for a, (rec, total) in zip(chunk, ex.map(lambda a: run_query(a, allowed), chunk)):
                     results[a] = rec
                     stats['pos_total'] += total

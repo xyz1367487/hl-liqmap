@@ -101,7 +101,7 @@ class PositionAcceptance(unittest.TestCase):
 
     def test_full_index_multibatch_restart_retry_exit_rediscovery(self):
         folder = fixture_dir()
-        addresses = {f'synthetic-{i:04}': {'fs': '2020-01-01', 'ls': '2020-02-02'} for i in range(905)}
+        addresses = {f'synthetic-{i:04}': {'fs': '2020-01-01', 'ls': '2020-02-02'} for i in range(4505)}
         original = copy.deepcopy(addresses)
         def save(name, data):
             (folder / (name + '.json')).write_text(json.dumps(data))
@@ -123,14 +123,14 @@ class PositionAcceptance(unittest.TestCase):
             harvest.snapshot_mode(query)
             self.assertIn('synthetic-0000', harvest._read_state('accounts', {})['accounts'])
             self.assertNotIn('synthetic-0001', harvest._read_state('accounts', {})['accounts'])
-            self.assertEqual(harvest._read_state('position_recheck', {})['cursor'], 400)
+            self.assertEqual(harvest._read_state('position_recheck', {})['cursor'], 2000)
             self.assertIn('synthetic-0010', harvest._read_state('position_recheck', {})['retry'])
             # Every call reloads JSON: equivalent to process restart between batches.
             for _ in range(2):
                 harvest.snapshot_mode(query)
             self.assertEqual(seen, set(addresses))
             q = harvest._read_state('position_recheck', {})
-            self.assertEqual(q['cursor'], 905)
+            self.assertEqual(q['cursor'], 4505)
             self.assertEqual(q['cycles'], 1)
             self.assertEqual(q['retry'], [])
             stage[0] = 2
@@ -147,16 +147,16 @@ class PositionAcceptance(unittest.TestCase):
             self.assertEqual(harvest._read_state('position_recheck', None), valid_backup)
 
     def test_plan_fairness_failed_retry_and_new_discovery(self):
-        state = prepare(None, {str(i): {} for i in range(900)}, {})
+        state = prepare(None, {str(i): {} for i in range(5000)}, {})
         batch, start, end = plan(state)
         finish(state, start, end, dict.fromkeys(batch, None))
         state = json.loads(json.dumps(state))
         state = prepare(state, {'new': {'fs': 'old', 'ls': 'old'}}, {})
         batch, start, end = plan(state)
-        self.assertEqual(end - start, 300)
-        self.assertEqual(len(batch), 400)
+        self.assertEqual(end - start, 1900)
+        self.assertEqual(len(batch), 2000)
         finish(state, start, end, dict.fromkeys(batch, None))
-        self.assertEqual(state['retry'][-400:], batch)
+        self.assertEqual(state['retry'][-2000:], batch)
         self.assertIn('new', state['order'])
 
     def test_diagnostic_limit_does_not_skip_unqueried_history(self):
