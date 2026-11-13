@@ -287,7 +287,11 @@ function wireChart(){
   $('tipDetails').ontoggle=()=>{if(!tip.hidden&&tipAnchor)placeReadout(...tipAnchor);};
   $('tipDetails').onclick=()=>{tipPinned=true;};
   $('closeTooltip').onclick=()=>{closeReadout();svg.focus();};
-  svg.addEventListener('wheel',event=>{if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();zoomChart(event.deltaY>0?1.15:1/1.15);},{passive:false});
+  svg.addEventListener('wheel',event=>{
+    // Only the price plotting area consumes the wheel; axes and the rest of the page still scroll.
+    if(event.deltaY===0||pointerPrice(event)===null)return;
+    event.preventDefault();zoomChart(event.deltaY>0?1.15:1/1.15);
+  },{passive:false});
   $('source').onchange=()=>{closeReadout();drawChart();};$('resolution').onchange=()=>{closeReadout();drawChart();};
   $('span').onchange=()=>{chartWindow=null;closeReadout();drawChart();};
   $('resetView').onclick=()=>{chartWindow=null;closeReadout();drawChart();};

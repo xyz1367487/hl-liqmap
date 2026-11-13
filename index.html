@@ -111,7 +111,7 @@
       <button type="button" id="navHigh" role="slider" aria-label="价格范围上限" aria-orientation="horizontal"></button>
     </div>
     <div class="range-caption"><span id="navBounds"></span><div><button id="zoomIn" aria-label="放大价格范围">＋</button><button id="zoomOut" aria-label="缩小价格范围">−</button><button id="resetView">重置范围</button></div></div>
-    <div class="chart-help" id="chartHelp">拖动主图或范围条平移 · Ctrl/⌘ + 滚轮缩放 · 方向键定位价格，Enter固定读数。累计开关仅隐藏图层，双轴金额口径不变。</div>
+    <div class="chart-help" id="chartHelp">拖动主图或范围条平移 · 图内直接滚轮缩放，图外滚动页面 · 方向键定位价格，Enter固定读数。累计开关仅隐藏图层，双轴金额口径不变。</div>
     <details class="secondary"><summary>手填价格范围</summary><div class="chart-controls"><label for="priceMin">下限 USD</label><input id="priceMin" type="number" min="0" step="any"><label for="priceMax">上限 USD</label><input id="priceMax" type="number" min="0" step="any"><button id="applyRange">应用</button></div></details>
     <details class="secondary"><summary>估算参数</summary><div class="ctl"><label class="chk"><input type="checkbox" id="estToggle"> 显示估算层</label><label class="chk"><input type="range" id="ls" min="20" max="80" value="50"> 多空假设 <span id="lsLabel">50/50</span></label></div></details>
     <details class="secondary"><summary>分布与累计说明</summary><div id="chartNote" class="prog"></div><div id="viewSummary" class="prog"></div><div id="netMeta" class="prog"></div><div id="netTable"></div></details>
@@ -140,7 +140,7 @@
 </main>
 
 <script src="chart-core.js?v=d86237d05d00"></script>
-<script src="chart-ui.js?v=91c71a7b48de"></script>
+<script src="chart-ui.js?v=3c881f2bdc27"></script>
 <script>
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};

@@ -23,6 +23,31 @@ test('real navigator keyboard handlers use the visible span even when a distant 
   key('navSelection','Home');
   assert.deepEqual(range(),[0,11000]);
 });
+test('plain wheel zooms only within the plot and leaves page scrolling outside it',()=>{
+  const fs=require('node:fs'),vm=require('node:vm');
+  const nodes={};
+  const node=id=>nodes[id]??={hidden:false,events:{},
+    addEventListener(type,handler,options){this.events[type]={handler,options};},
+    getBoundingClientRect(){return {left:0,top:0,width:1120,height:420};},
+    setAttribute(){},focus(){},matches(){return false;}};
+  const context=vm.createContext({LiqChart:C,$:node,clearTimeout,setTimeout,
+    window:{addEventListener(){}},document:{addEventListener(){},querySelectorAll(){return [];}},
+    ResizeObserver:class{observe(){}}});
+  vm.runInContext(fs.readFileSync(__dirname+'/../chart-ui.js','utf8'),context);
+  vm.runInContext('chartContext={domain:[0,51317294.7],W:1120,H:420,left:72,right:1042,top:48,bottom:365,min:64000,max:75000};chartWindow=[64000,75000];drawChart=()=>{};wireChart();',context);
+  const wheel=nodes.priceChart.events.wheel;
+  assert.equal(wheel.options.passive,false);
+  const range=()=>JSON.parse(vm.runInContext('JSON.stringify(chartWindow)',context));
+  const dispatch=(x,y,deltaY)=>{let prevented=false;wheel.handler({clientX:x,clientY:y,deltaY,ctrlKey:false,metaKey:false,preventDefault(){prevented=true;}});return prevented;};
+  assert.equal(dispatch(500,200,-120),true);
+  const zoomedIn=range();assert.ok(zoomedIn[1]-zoomedIn[0]<11000);
+  assert.equal(dispatch(500,200,120),true);
+  assert.ok(Math.abs((range()[1]-range()[0])-11000)<1e-8);
+  for(const [x,y] of [[30,200],[1100,200],[500,20],[500,400]]){
+    const before=range();assert.equal(dispatch(x,y,120),false);assert.deepEqual(range(),before);
+  }
+  const before=range();assert.equal(dispatch(500,200,0),false);assert.deepEqual(range(),before);
+});
 const rows=C.normalize({bucket_step:.05,buckets:[
   {side:'L',index:1800,notional:100,positions:1,px_low:90.01,px_high:90.02,lev:[100,0,0,0]},
   {side:'S',index:1800,notional:200,positions:1,px_low:90.03,px_high:90.04,lev:[0,200,0,0]},
