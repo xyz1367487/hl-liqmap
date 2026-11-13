@@ -330,7 +330,9 @@ function wireChart(){
     const end=()=>{navDrag=null;};node.onpointerup=end;node.onpointercancel=end;node.onlostpointercapture=end;
     node.onkeydown=event=>{
       const keys=['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','PageUp','PageDown','Home','End'];if(!keys.includes(event.key))return;
-      const domain=chartContext.domain,step=(domain[1]-domain[0])/(event.shiftKey?100:1000),view=[...chartWindow];
+      // Keyboard movement follows the visible window, so a far outlier cannot collapse it in one step.
+      const domain=chartContext.domain,view=[...chartWindow];
+      const step=(view[1]-view[0])/(event.shiftKey?10:100);
       let delta=step*(['ArrowLeft','ArrowDown','PageDown'].includes(event.key)?-1:1)*(event.key.startsWith('Page')?10:1);
       if(event.key==='Home')delta=domain[0]-(id==='navHigh'?view[1]:view[0]);
       if(event.key==='End')delta=domain[1]-(id==='navLow'?view[0]:view[1]);

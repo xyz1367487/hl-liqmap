@@ -1,6 +1,28 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const C=require('./load-core.cjs');
+test('real navigator keyboard handlers use the visible span even when a distant bucket stretches the overview',()=>{
+  const fs=require('node:fs'),vm=require('node:vm');
+  const nodes={};
+  const node=id=>nodes[id]??=( {hidden:false,addEventListener(){},setAttribute(){},focus(){},matches(){return false;}} );
+  const context=vm.createContext({LiqChart:C,$:node,clearTimeout,setTimeout,
+    window:{addEventListener(){}},document:{addEventListener(){},querySelectorAll(){return [];}},
+    ResizeObserver:class{observe(){}}});
+  vm.runInContext(fs.readFileSync(__dirname+'/../chart-ui.js','utf8'),context);
+  vm.runInContext('chartContext={domain:[0,51317294.7]};chartWindow=[64000,75000];drawChart=()=>{};wireChart();',context);
+  const key=(id,value,shiftKey=false)=>nodes[id].onkeydown({key:value,shiftKey,preventDefault(){}});
+  const range=()=>JSON.parse(vm.runInContext('JSON.stringify(chartWindow)',context));
+  key('navLow','ArrowRight');
+  assert.deepEqual(range(),[64110,75000]);
+  vm.runInContext('chartWindow=[64000,75000]',context);
+  key('navHigh','ArrowLeft',true);
+  assert.deepEqual(range(),[64000,73900]);
+  vm.runInContext('chartWindow=[64000,75000]',context);
+  key('navSelection','ArrowRight');
+  assert.deepEqual(range(),[64110,75110]);
+  key('navSelection','Home');
+  assert.deepEqual(range(),[0,11000]);
+});
 const rows=C.normalize({bucket_step:.05,buckets:[
   {side:'L',index:1800,notional:100,positions:1,px_low:90.01,px_high:90.02,lev:[100,0,0,0]},
   {side:'S',index:1800,notional:200,positions:1,px_low:90.03,px_high:90.04,lev:[0,200,0,0]},
