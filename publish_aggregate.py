@@ -67,16 +67,31 @@ def publish(path):
     print('Validated aggregate published to dedicated aggregate branch')
 
 
+class _NoMetadataRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Reject even same-host redirects; authorization stays on the fixed endpoint.
+        return None
+
+
 def public_metadata(endpoint):
     labels = {'repos/' + PUBLIC_REPO: 'repos', 'meta': 'meta'}
     if endpoint not in labels:
         raise RuntimeError('Public metadata lookup failed (endpoint)') from None
     label = labels[endpoint]
+    headers = {'Accept': 'application/vnd.github+json',
+               'User-Agent': 'liqmap-aggregate-publisher',
+               'X-GitHub-Api-Version': '2022-11-28'}
+    token = os.environ.get('GITHUB_TOKEN')
+    if token:
+        headers['Authorization'] = 'Bearer ' + token
+    request = urllib.request.Request('https://api.github.com/' + endpoint,
+                                     headers=headers, method='GET')
+    opener = urllib.request.build_opener(_NoMetadataRedirect())
     # Only these public GETs retry; TLS verification and caller validation remain.
     for attempt in range(3):
         retry = False
         try:
-            with urllib.request.urlopen('https://api.github.com/' + endpoint, timeout=30) as response:
+            with opener.open(request, timeout=30) as response:
                 result = json.load(response)
             if not isinstance(result, dict):
                 raise ValueError('Expected JSON object')

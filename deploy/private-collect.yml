@@ -56,6 +56,7 @@ jobs:
       - name: Publish ONLY validated aggregate (when secret exists)
         if: steps.export.outcome == 'success' && env.ENABLE_PUBLIC_EXPORT == 'true'
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           PUBLIC_AGGREGATE_SSH_KEY: ${{ secrets.PUBLIC_AGGREGATE_SSH_KEY }}
           PUBLIC_AGGREGATE_TOKEN: ${{ secrets.PUBLIC_AGGREGATE_TOKEN }}
         run: python -B publish_aggregate.py '${{ steps.export.outputs.aggregate_path }}'

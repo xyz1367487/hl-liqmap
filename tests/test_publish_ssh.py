@@ -92,10 +92,10 @@ class SSHPublisherTests(unittest.TestCase):
                         'PUBLIC_AGGREGATE_SSH_KEY': FAKE_KEY,
                         'PUBLIC_AGGREGATE_TOKEN': 'synthetic-unused-token',
                         'GIT_TRACE': '1', 'GIT_OBJECT_DIRECTORY': '/untrusted'}, clear=True), \
-                patch.object(publisher.urllib.request, 'urlopen', side_effect=network), \
+                patch.object(publisher.urllib.request.OpenerDirector, 'open', side_effect=network), \
                 patch.object(publisher.subprocess, 'run', side_effect=harness.run):
             publisher.publish(path)
-        self.assertEqual([url for url, _ in urls],
+        self.assertEqual([request.full_url for request, _ in urls],
                          ['https://api.github.com/repos/' + publisher.PUBLIC_REPO,
                           'https://api.github.com/meta'])
         self.assertTrue(all('context' not in kwargs for _, kwargs in urls))
@@ -223,7 +223,7 @@ class PublicMetadataTests(unittest.TestCase):
 
     def lookup(self, effects, endpoint='meta', expected=None, attempts=1):
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(publisher.urllib.request, 'urlopen', side_effect=effects) as network, \
+        with patch.object(publisher.urllib.request.OpenerDirector, 'open', side_effect=effects) as network, \
                 patch.object(publisher.time, 'sleep') as sleep, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             if expected is None:
@@ -244,7 +244,10 @@ class PublicMetadataTests(unittest.TestCase):
         self.assertEqual(sleep.call_args_list,
                          [unittest.mock.call(i + 1) for i in range(attempts - 1)])
         for args, kwargs in network.call_args_list:
-            self.assertEqual(args, ('https://api.github.com/' + endpoint,))
+            self.assertEqual(len(args), 1)
+            self.assertIsInstance(args[0], publisher.urllib.request.Request)
+            self.assertEqual(args[0].full_url, 'https://api.github.com/' + endpoint)
+            self.assertEqual(args[0].get_method(), 'GET')
             self.assertEqual(kwargs, {'timeout': 30})
         return result
 
@@ -305,7 +308,7 @@ class PublicMetadataTests(unittest.TestCase):
                 self.lookup([error], expected='meta: ' + category)
 
     def test_unknown_endpoint_refused_before_network(self):
-        with patch.object(publisher.urllib.request, 'urlopen') as network:
+        with patch.object(publisher.urllib.request.OpenerDirector, 'open') as network:
             with self.assertRaisesRegex(RuntimeError, r'failed \(endpoint\)'):
                 publisher.public_metadata('repos/private-example')
             network.assert_not_called()
@@ -319,7 +322,7 @@ class PublicMetadataTests(unittest.TestCase):
                 ([{'private': False, 'full_name': publisher.PUBLIC_REPO}, {'ssh_keys': []}],
                  'Invalid SSH host metadata', 2)):
             with self.subTest(message=message), \
-                    patch.object(publisher.urllib.request, 'urlopen', side_effect=[
+                    patch.object(publisher.urllib.request.OpenerDirector, 'open', side_effect=[
                         io.BytesIO(json.dumps(obj).encode()) for obj in responses]) as network, \
                     patch.object(publisher.time, 'sleep') as sleep, \
                     patch.object(publisher.subprocess, 'run') as git:
@@ -328,6 +331,120 @@ class PublicMetadataTests(unittest.TestCase):
                 self.assertEqual(network.call_count, attempts)
                 sleep.assert_not_called()
                 git.assert_not_called()
+
+
+class MetadataAuthenticationTests(unittest.TestCase):
+    sensitive = PublicMetadataTests.sensitive
+    http_error = PublicMetadataTests.http_error
+    lookup = PublicMetadataTests.lookup
+
+    def test_request_headers_and_anonymous_mode(self):
+        for token in (None, '', self.sensitive):
+            env = {'PUBLIC_AGGREGATE_SSH_KEY': 'synthetic-ssh-not-http',
+                   'PUBLIC_AGGREGATE_TOKEN': 'synthetic-pat-not-http'}
+            if token is not None:
+                env['GITHUB_TOKEN'] = token
+            for endpoint in ('meta', 'repos/' + publisher.PUBLIC_REPO):
+                with self.subTest(token_present=bool(token), endpoint=endpoint), \
+                        patch.dict(os.environ, env, clear=True), \
+                        patch.object(publisher.urllib.request.OpenerDirector, 'open',
+                                     return_value=io.BytesIO(b'{}')) as network:
+                    publisher.public_metadata(endpoint)
+                    request = network.call_args.args[0]
+                    self.assertEqual(request.full_url, 'https://api.github.com/' + endpoint)
+                    self.assertEqual(request.get_method(), 'GET')
+                    self.assertIsNone(request.data)
+                    headers = dict((k.lower(), v) for k, v in request.header_items())
+                    expected = {'accept': 'application/vnd.github+json',
+                                'user-agent': 'liqmap-aggregate-publisher',
+                                'x-github-api-version': '2022-11-28'}
+                    if token:
+                        expected['authorization'] = 'Bearer ' + token
+                    self.assertEqual(headers, expected)
+                    self.assertEqual(network.call_args.kwargs, {'timeout': 30})
+
+    def test_untrusted_endpoints_are_refused_before_opener(self):
+        for endpoint in ('https://attacker.example/meta', '//attacker.example/meta',
+                         'meta?redirect=1', 'meta/../meta', 'repos/' + publisher.PUBLIC_REPO + '/extra'):
+            with self.subTest(endpoint=endpoint), \
+                    patch.dict(os.environ, {'GITHUB_TOKEN': self.sensitive}, clear=True), \
+                    patch.object(publisher.urllib.request, 'build_opener') as build:
+                with self.assertRaisesRegex(RuntimeError, r'failed \(endpoint\)'):
+                    publisher.public_metadata(endpoint)
+                build.assert_not_called()
+
+    def test_opener_keeps_default_https_verification(self):
+        build = publisher.urllib.request.build_opener
+        openers = []
+        def capture(*handlers):
+            result = build(*handlers)
+            openers.append(result)
+            return result
+        with patch.object(publisher.urllib.request, 'build_opener', side_effect=capture), \
+                patch.object(publisher.urllib.request.OpenerDirector, 'open',
+                             return_value=io.BytesIO(b'{}')):
+            publisher.public_metadata('meta')
+        https = [h for h in openers[0].handlers
+                 if isinstance(h, publisher.urllib.request.HTTPSHandler)]
+        self.assertEqual(len(https), 1)
+        self.assertIsNone(https[0]._context)
+        defaults = ssl.create_default_context()
+        self.assertEqual(defaults.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(defaults.check_hostname)
+
+    def test_authenticated_permission_failure_never_falls_back(self):
+        with patch.dict(os.environ, {'GITHUB_TOKEN': self.sensitive}, clear=True):
+            for code in (401, 403):
+                self.lookup([self.http_error(code, {'X-RateLimit-Remaining': '5'})],
+                            expected='meta: http-' + str(code))
+
+    def test_authenticated_retries_keep_authorization(self):
+        with patch.dict(os.environ, {'GITHUB_TOKEN': self.sensitive}, clear=True), \
+                patch.object(publisher.urllib.request.OpenerDirector, 'open', side_effect=[
+                    self.http_error(403, {'X-RateLimit-Remaining': '0'}),
+                    io.BytesIO(b'{}')]) as network, \
+                patch.object(publisher.time, 'sleep') as sleep:
+            self.assertEqual(publisher.public_metadata('meta'), {})
+            self.assertEqual(network.call_count, 2)
+            for call in network.call_args_list:
+                self.assertEqual(call.args[0].get_header('Authorization'),
+                                 'Bearer ' + self.sensitive)
+            sleep.assert_called_once_with(1)
+
+    def test_real_opener_rejects_redirects_before_second_request(self):
+        # Exercise urllib's actual redirect/error processing with synthetic transport.
+        from email.message import Message
+        from urllib.response import addinfourl
+        for code in (301, 302, 303, 307, 308):
+            for target in ('https://attacker.example/' + self.sensitive,
+                           'https://api.github.com/meta?redirected=1'):
+                calls = []
+
+                class Transport(publisher.urllib.request.HTTPSHandler):
+                    def https_open(self, request):
+                        calls.append(request)
+                        headers = Message()
+                        headers['Location'] = target
+                        response = addinfourl(io.BytesIO(b''), headers, request.full_url, code)
+                        response.msg = 'synthetic redirect'
+                        return response
+
+                build = publisher.urllib.request.build_opener
+                def opener(*handlers):
+                    return build(Transport(), *handlers)
+
+                with self.subTest(code=code, target=target), \
+                        patch.dict(os.environ, {'GITHUB_TOKEN': self.sensitive}, clear=True), \
+                        patch.object(publisher.urllib.request, 'build_opener', side_effect=opener), \
+                        patch.object(publisher.time, 'sleep') as sleep:
+                    with self.assertRaises(RuntimeError) as caught:
+                        publisher.public_metadata('meta')
+                    self.assertEqual(str(caught.exception),
+                                     f'Public metadata lookup failed (meta: http-{code}; attempts=1/3)')
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(calls[0].full_url, 'https://api.github.com/meta')
+                    self.assertNotIn(self.sensitive, str(caught.exception))
+                    sleep.assert_not_called()
 
 
 if __name__ == '__main__':
