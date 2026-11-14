@@ -10,17 +10,40 @@ function levLegend(){
     return `<button type="button" class="lev-key${off?' off':''}" data-lev="${i}" aria-pressed="${off?'false':'true'}" title="点击隐藏/显示 ${label} 杠杆档（累计口径不变）"><i style="background:${LEV_COLORS[i]}"></i>${label}<b data-levsum="${i}"></b></button>`;
   }).join('');
 }
+// Single-entry bounded caches: keys include every semantic input, never visibility toggles.
+const chartMetrics={draws:0,normalize:0,coarsen:0,cumulative:0,extent:0,overview:0,tooltip:0};
+window.chartMetrics=chartMetrics;
+const derivedCache=new Map();
+function derived(name,keys,compute){
+  const old=derivedCache.get(name);
+  if(old&&keys.length===old.keys.length&&keys.every((k,i)=>Object.is(k,old.keys[i])))return old.value;
+  chartMetrics[name]++;
+  const value=compute();derivedCache.set(name,{keys,value});return value;
+}
+let drawFrame=null;
 function drawChart(){
+  if(cur){
+    const identity=cur.name+':'+$('source').value;
+    if(chartIdentity!==identity){chartWindow=null;chartIdentity=identity;keyboardPrice=null;closeReadout();}
+  }
+  if(drawFrame!==null)return;
+  drawFrame=requestAnimationFrame(()=>{drawFrame=null;paintChart();});
+}
+function paintChart(){
   if(!cur) return;
+  chartMetrics.draws++;
   const C=LiqChart, svg=$('priceChart'), frame=$('chartFrame'), tip=$('chartTooltip');
   const watch=$('source').value==='watchlist', m=aggregateSnapshot?.markets[cur.name];
   const reference=m?.reference_mark||Number(cur.ctx.markPx);
   const mark=cur.liveAt?Number(cur.ctx.markPx):reference;
   const version=watch?2:aggregateSnapshot?.schema_version;
-  const base=watch?C.localBuckets(wlAll.filter(p=>p.coin===cur.name),reference):C.normalize(m,version);
+  const watchKey=watch?JSON.stringify(wlAll.filter(p=>p.coin===cur.name)):null;
+  const base=derived('normalize',[watch,cur.name,aggregateSnapshot,m,version,reference,watchKey],()=>watch?C.localBuckets(wlAll.filter(p=>p.coin===cur.name),reference):C.normalize(m,version));
+  const extent=derived('extent',[base],()=>base.reduce(([lo,hi],b)=>[Math.min(lo,b.lo),Math.max(hi,b.hi)],[Infinity,-Infinity]));
   const legacy=version===1, factor=+$('resolution').value;
   $('resolution').disabled=legacy;
-  const bars=C.coarsen(base,reference*C.FRACTION,factor), cum=C.cumulative(base,mark);
+  const bars=derived('coarsen',[base,reference*C.FRACTION,factor],()=>C.coarsen(base,reference*C.FRACTION,factor));
+  const cum=derived('cumulative',[base,mark],()=>C.cumulative(base,mark));
   // Leverage stacking needs a real split on every drawn bucket; otherwise bars stay single-colour.
   const stackable=bars.some(b=>Array.isArray(b.lev));
   const levShown=i=>!hiddenLev.includes(i);
@@ -37,20 +60,18 @@ function drawChart(){
   const total=side=>base.filter(b=>b.side===side).reduce((n,b)=>n+b.notional,0);
   $('chartTitle').textContent=cur.name+' · 潜在强平名义金额';
   $('chartSubtitle').textContent=(watch?'本机 Watchlist · 独立数据源':legacy?'旧版 schema1 · 原14档区间（不拆分）':'Hyperliquid · 固定参考价网格')+' · '+(legacy?'区间内分布未知':(factor*5)+'bp 显示分辨率')+(stackable?' · 按真实杠杆档堆叠':'');
-  $('chartTotal').textContent='全范围多头 $'+fmtUSD(total('L'))+'\n全范围空头 $'+fmtUSD(total('S'));
+  const known=watch?Boolean(window.watchlistAt):Boolean(aggregateSnapshot);
+  $('chartTotal').textContent=known?'全范围多头 $'+fmtUSD(total('L'))+'\n全范围空头 $'+fmtUSD(total('S')):'全范围多头 / 空头：未知';
   $('chartTotal').style.whiteSpace='pre-line';
-  const age=aggregateSnapshot?(Date.now()/1000-aggregateSnapshot.generated_at_unix)/60:null;
+  updateFreshness();
   const liveAge=cur.liveAt?(Date.now()-cur.liveAt)/1000:Infinity;
-  const watchAge=window.watchlistAt?(Date.now()-window.watchlistAt)/60000:Infinity;
-  const liveText=Number.isFinite(liveAge)?'行情 '+new Date(cur.liveAt).toLocaleTimeString('zh-CN')+(liveAge>60?'（行情已过期）':''):'行情不可用，暂以分桶参考价定位（非实时现价）';
-  $('freshness').className=((watch?watchAge>120:age===null||age>120)||liveAge>60)?'stale':'';
-  $('freshness').textContent=(watch?'Watchlist '+(window.watchlistAt?new Date(window.watchlistAt).toLocaleString('zh-CN')+(watchAge>120?' · ⚠ Watchlist已过期（超过2小时）':''):'尚未拉取'):(aggregateSnapshot?'聚合 '+new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN')+' · '+Math.max(0,Math.floor(age))+'分钟前'+(age>120?' · ⚠ 快照已过期（超过2小时）':''):'尚无聚合快照'))+' ｜ '+liveText+' ｜ 固定分桶参考价 $'+precise(reference);
   // Unsplit buckets are surfaced by amount so a degraded view is never silent.
   const levUnknown=m?.lev_unknown;
   const unknownText=stackable&&levUnknown&&levUnknown.buckets?' 未按杠杆拆分（原始仓位缺杠杆字段）'+levUnknown.buckets+' 桶 / $'+fmtUSD(levUnknown.notional)+'。':'';
   $('chartNote').textContent=(legacy?'旧桶以完整极值区间绘制；多空可能跨参考价，不代表区间内均匀分布。 ':'')+'未纳入累计：跨现价待定位 多 $'+fmtUSD(cum.uncertain.L)+' / 空 $'+fmtUSD(cum.uncertain.S)+'；方向已越过现价 多 $'+fmtUSD(cum.past.L)+' / 空 $'+fmtUSD(cum.past.S)+'（保留原桶，状态未知）。'+unknownText;
   const inView=visible.reduce((sum,b)=>sum+b.notional,0), all=total('L')+total('S');
   $('viewSummary').textContent='与视窗相交的完整桶 '+visible.length+' / '+bars.length+' · 名义 $'+fmtUSD(inView)+' · 完全在窗外 $'+fmtUSD(Math.max(0,all-inView))+'。累计在桶远端极值阶跃计入；完整桶内部不插值。'+(stackable&&hiddenLev.length?' 已隐藏杠杆档 '+hiddenLev.map(i=>C.LEV_LABELS[i]).join('、')+'：柱高与左轴按可见档重算，累计曲线口径不变。':'');
+  if(!known){$('chartNote').textContent=aggregateEmptyText()+'；金额与累计未知。';$('viewSummary').textContent='尚无有效分布，不将缺失数据记为零。';}
   renderAggregateSummary();
   $('netProg').classList.toggle('load-failed',aggregateState==='error');
   const W=Math.max(640,frame.clientWidth),H=420,left=72,right=W-78,top=48,bottom=365;
@@ -101,7 +122,8 @@ function drawChart(){
     }
     html+='</g>';
   });
-  est.forEach((b,i)=>{html+=`<rect class="estimate" data-est="${i}" tabindex="0" x="${x(b.px)-3}" y="${y(b.notional)}" width="6" height="${bottom-y(b.notional)}" fill="${color(b.side)}" stroke="${color(b.side)}"/>`;});
+  let estimateHTML='';
+  est.forEach((b,i)=>{estimateHTML+=`<rect class="estimate" data-est="${i}" data-est-key="${b.side}:${b.t}" tabindex="0" x="${x(b.px)-3}" y="${y(b.notional)}" width="6" height="${bottom-y(b.notional)}" fill="${color(b.side)}" stroke="${color(b.side)}"/>`;});
   for(const side of ['L','S']){
     if(hiddenSeries.includes(side)) continue;
     const boundary=side==='L'?min:max,points=cum.points[side];
@@ -121,11 +143,24 @@ function drawChart(){
   if(mark>=min&&mark<=max) html+=`<text class="price-label" x="${Math.min(right-96,Math.max(left+4,x(mark)+12))}" y="34">${Number.isFinite(liveAge)?'行情':'参考定位'} $${fmtPx(mark)}</text>`;
   if(!base.length) html+=`<text x="${(left+right)/2}" y="240" text-anchor="middle">${watch?'Watchlist 尚无该币有效强平价，请先拉取仓位':aggregateEmptyText()}</text>`;
   else if(!visible.length) html+=`<text x="${(left+right)/2}" y="240" text-anchor="middle">当前价格范围无真实桶，请扩大范围</text>`;
-  svg.innerHTML=html;
+  // Keep the SVG shell and focusable estimate nodes attached across data refreshes.
+  if(!svg.querySelector('[data-scene]'))svg.innerHTML='<g data-scene></g><g data-estimates clip-path="url(#plotClip)"></g>';
+  svg.querySelector('[data-scene]').innerHTML=html;
+  const estimates=svg.querySelector('[data-estimates]'),template=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  template.innerHTML=estimateHTML;
+  const keep=new Set();
+  for(const next of [...template.children]){
+    const key=next.dataset.estKey;keep.add(key);
+    let node=estimates.querySelector(`[data-est-key="${key}"]`);
+    if(!node){node=next;estimates.append(node);}
+    else for(const attr of next.attributes)if(node.getAttribute(attr.name)!==attr.value)node.setAttribute(attr.name,attr.value);
+  }
+  for(const node of [...estimates.children])if(!keep.has(node.dataset.estKey))node.remove();
   if(!tipPinned)tip.hidden=true;
   const legend=$('levLegend');
   if(legend){
-    legend.innerHTML=stackable?levLegend():'';
+    if(stackable&&!legend.children.length)legend.innerHTML=levLegend();
+    for(const button of legend.querySelectorAll('[data-lev]')){const off=hiddenLev.includes(+button.dataset.lev);button.classList.toggle('off',off);button.setAttribute('aria-pressed',!off);}
     legend.hidden=!stackable;
     if(stackable){
       const sums=[0,0,0,0];
@@ -137,13 +172,15 @@ function drawChart(){
     }
   }
   window.chartInspection={coin:cur.name,version,mark,reference,window:[...chartWindow],baseCount:base.length,visibleCount:visible.length,totals:{L:total('L'),S:total('S')},cumulative: cum.totals,uncertain:cum.uncertain,past:cum.past,barMax,cumMax,stackable,hiddenLev:[...hiddenLev],levUnknown:levUnknown?{...levUnknown}:null};
-  chartContext={C,svg,frame,tip,base,bars,visible,est,cum,mark,reference,legacy,factor,watch,stackable,levShown,W,H,left,right,top,bottom,x,min,max};
+  chartContext={C,svg,frame,tip,base,extent,bars,visible,est,cum,mark,reference,legacy,factor,watch,stackable,levShown,W,H,left,right,top,bottom,x,min,max};
   renderNavigator();
   wireChart();
   if((tipPinned||tip.matches(':hover,:focus-within'))&&keyboardPrice!==null)locatePrice(keyboardPrice);
 }
 function closeReadout(){
   clearTimeout(tipTimer);tipPinned=false;
+  if(readoutFrame!==null){cancelAnimationFrame(readoutFrame);readoutFrame=null;}
+  if(placementFrame!==null){cancelAnimationFrame(placementFrame);placementFrame=null;}
   $('chartTooltip').hidden=true;
   const cross=$('crosshair');if(cross) cross.setAttribute('hidden','');
 }
@@ -153,8 +190,12 @@ function deferClose(){
 }
 function placeReadout(px,py){
   tipAnchor=[px,py];
+  if(placementFrame!==null)return;
+  placementFrame=requestAnimationFrame(()=>{placementFrame=null;positionReadout(...tipAnchor);});
+}
+function positionReadout(px,py){
   const tip=$('chartTooltip');
-  tip.style.left='8px';tip.style.top='8px';
+
   const {width,height}=tip.getBoundingClientRect(),pad=8;
   const plot=$('chartFrame').getBoundingClientRect();
   const floor=Math.max(pad,Math.min(plot.top,innerHeight-height-pad));
@@ -164,17 +205,27 @@ function placeReadout(px,py){
   tip.style.left=Math.max(pad,Math.min(left,innerWidth-width-pad))+'px';
   tip.style.top=Math.max(floor,Math.min(top,innerHeight-height-pad))+'px';
 }
-function locatePrice(price,clientX,clientY){
+let readoutFrame=null, placementFrame=null;
+function queueReadout(render,args){
+  pendingReadout={render,args};
+  if(readoutFrame!==null)return;
+  readoutFrame=requestAnimationFrame(()=>{readoutFrame=null;pendingReadout.render(...pendingReadout.args);});
+}
+function locatePrice(...args){queueReadout(paintReadout,args);}
+let pendingReadout=null;
+function paintReadout(price,clientX,clientY){
   if(!chartContext||panDrag||navDrag) return;
   const c=chartContext,{C,svg,base,bars,cum,mark,reference,legacy,factor,watch,x,left,right,top,bottom,W,H}=c;
   if(price<c.min||price>c.max) return;
+  chartMetrics.tooltip++;
+  const svgBox=svg.getBoundingClientRect();
   clearTimeout(tipTimer);keyboardPrice=price;
   const xx=x(price),cross=$('crosshair');
   cross.removeAttribute('hidden');
   cross.innerHTML=`<line class="locator" x1="${xx}" x2="${xx}" y1="${top}" y2="${bottom}"/><rect x="${Math.max(left,Math.min(right-108,xx-54))}" y="${bottom+3}" width="108" height="24" rx="4"/><text text-anchor="middle" x="${Math.max(left+54,Math.min(right-54,xx))}" y="${bottom+19}">$${precise(price)}</text>`;
   const loaded=watch?Boolean(window.watchlistAt):Boolean(aggregateSnapshot);
   const hit=C.hitPrice(bars,price,reference*C.FRACTION,factor,legacy);
-  const fullLo=base.reduce((v,b)=>Math.min(v,b.lo),Infinity),fullHi=base.reduce((v,b)=>Math.max(v,b.hi),-Infinity);
+  const [fullLo,fullHi]=c.extent;
   // Absence is zero only inside a loaded grid's observed extent; never on failed initial load.
   const knownEmpty=loaded&&!legacy&&price>=fullLo&&price<fullHi;
   const summary=[],details=[];
@@ -205,18 +256,24 @@ function locatePrice(price,clientX,clientY){
   details.push(legacy?'schema1 按原区间展示，不伪造细分。':'显示分辨率 '+factor*5+'bp；按真实网格 index 命中，不吸附最近柱。');
   $('tipSummary').textContent=summary.join('\n');$('tipLong').textContent=details.join('\n');
   $('chartTooltip').hidden=false;
-  const box=svg.getBoundingClientRect();
+  const box=svgBox;
   placeReadout(clientX??box.left+xx/W*box.width,clientY??box.top+H/2/H*box.height);
   window.chartReadout={price,interval:hit.interval,rows:hit.rows.map(b=>({side:b.side,index:b.index,notional:b.notional})),knownEmpty,loaded};
 }
 function renderNavigator(){
   const c=chartContext,{C,base,mark}=c;
-  const domain=navDrag?.domain||C.overviewDomain(base,mark,chartWindow);
+  // Same domain rule as core.overviewDomain, using cached full-distribution extrema.
+  const loDomain=Math.min(mark,chartWindow[0],c.extent[0]),hiDomain=Math.max(mark,chartWindow[1],c.extent[1]);
+  const domain=navDrag?.domain||[Math.max(0,loDomain),Math.max(hiDomain,loDomain+Math.max(mark*C.FRACTION,Number.EPSILON))];
   c.domain=domain;
-  const scale=C.linear(domain,[0,1000]),columns=new Map();
-  for(const b of base){const col=Math.max(0,Math.min(999,Math.floor(scale((b.lo+b.hi)/2))));columns.set(col,(columns.get(col)||0)+b.notional);}
-  const peak=Math.max(1,...columns.values());
-  $('overview').innerHTML=[...columns].map(([col,value])=>`<path d="M${col+.5},48 V${48-44*value/peak}" stroke="#93afd2" stroke-width="1"/>`).join('');
+  const overview=derived('overview',[base,domain[0],domain[1]],()=>{
+    const scale=C.linear(domain,[0,1000]),columns=new Map();
+    for(const b of base){const col=Math.max(0,Math.min(999,Math.floor(scale((b.lo+b.hi)/2))));columns.set(col,(columns.get(col)||0)+b.notional);}
+    const peak=Math.max(1,...columns.values());
+    return [...columns].map(([col,value])=>`<path d="M${col+.5},48 V${48-44*value/peak}" stroke="#93afd2" stroke-width="1"/>`).join('');
+  });
+  const overviewNode=$('overview');
+  if(overviewNode._markup!==overview){overviewNode.innerHTML=overview;overviewNode._markup=overview;}
   const percent=p=>(p-domain[0])/(domain[1]-domain[0])*100;
   const lo=percent(chartWindow[0]),hi=percent(chartWindow[1]);
   $('navSelection').style.left=lo+'%';$('navSelection').style.width=(hi-lo)+'%';
@@ -265,7 +322,12 @@ function wireChart(){
   };
   const endPan=event=>{
     if(!panDrag)return;
-    const drag=panDrag;panDrag=null;svg.classList.remove('dragging');
+    const drag=panDrag;
+    if(event.type==='pointerup'&&(drag.moved||Math.abs(event.clientX-drag.startX)>=4)){
+      drag.moved=true;
+      chartWindow=LiqChart.moveRange(drag.view,-(event.clientX-drag.startX)/drag.width*(drag.view[1]-drag.view[0]));drawChart();
+    }
+    panDrag=null;svg.classList.remove('dragging');
     if(svg.hasPointerCapture?.(event.pointerId))svg.releasePointerCapture(event.pointerId);
     if(event.type!=='pointercancel'&&!drag.moved){const price=pointerPrice(event);if(price!==null){tipPinned=true;locatePrice(price,event.clientX,event.clientY);}}
   };
@@ -304,7 +366,7 @@ function wireChart(){
   $('levLegend').onclick=event=>{
     const key=event.target.closest('[data-lev]');if(!key)return;
     const band=+key.dataset.lev;hiddenLev=hiddenLev.includes(band)?hiddenLev.filter(i=>i!==band):[...hiddenLev,band].sort((a,b)=>a-b);
-    closeReadout();drawChart();$('levLegend').querySelector(`[data-lev="${band}"]`)?.focus();
+    closeReadout();drawChart();
   };
   document.querySelectorAll('[data-series]').forEach(button=>button.onclick=()=>{
     const side=button.dataset.series;hiddenSeries=hiddenSeries.includes(side)?hiddenSeries.filter(s=>s!==side):[...hiddenSeries,side];
@@ -331,7 +393,12 @@ function wireChart(){
       const d=navDrag,delta=(event.clientX-d.startX)/d.width*(d.domain[1]-d.domain[0]);
       changeNavigator(id,d.view,delta,d.domain);drawChart();
     };
-    const end=()=>{navDrag=null;};node.onpointerup=end;node.onpointercancel=end;node.onlostpointercapture=end;
+    const end=event=>{
+      if(navDrag&&event.type==='pointerup'){
+        const d=navDrag;changeNavigator(id,d.view,(event.clientX-d.startX)/d.width*(d.domain[1]-d.domain[0]),d.domain);drawChart();
+      }
+      navDrag=null;
+    };node.onpointerup=end;node.onpointercancel=end;node.onlostpointercapture=end;
     node.onkeydown=event=>{
       const keys=['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','PageUp','PageDown','Home','End'];if(!keys.includes(event.key))return;
       // Keyboard movement follows the visible window, so a far outlier cannot collapse it in one step.
@@ -344,15 +411,18 @@ function wireChart(){
     };
   }
 }
-function showEstimate(node,event){
+function showEstimate(node,event){queueReadout(paintEstimate,[node,{clientX:event.clientX,clientY:event.clientY}]);}
+function paintEstimate(node,event){
+  if(!node.isConnected||panDrag||navDrag)return;
   const b=chartContext.est[+node.dataset.est];if(!b)return;
+  const box=node.getBoundingClientRect();chartMetrics.tooltip++;
   const cross=$('crosshair');if(cross)cross.setAttribute('hidden','');
   $('tipSummary').textContent=`假设估算 · ${b.side==='L'?'多头':'空头'} · ${b.t}x
 假设强平价 $${precise(b.px)}
 估算名义 USD $${money(b.notional)}`;
   $('tipLong').textContent='OI × 杠杆权重 × 多空假设。不是真实仓位，不计入累计。';
   $('chartTooltip').hidden=false;
-  const box=node.getBoundingClientRect();placeReadout(event.clientX??box.x,event.clientY??box.y);
+  placeReadout(event.clientX??box.x,event.clientY??box.y);
 }
 function changeNavigator(id,view,delta,domain){
   const gap=Math.max((domain[1]-domain[0])*1e-9,Number.EPSILON);
@@ -363,3 +433,14 @@ function changeNavigator(id,view,delta,domain){
 function precise(n){return Number(n).toLocaleString('en-US',{maximumSignificantDigits:10});}
 function money(n){return Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function escapeChart(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+function updateFreshness(){
+  if(!cur)return;
+  const watch=$('source').value==='watchlist',reference=aggregateSnapshot?.markets[cur.name]?.reference_mark||Number(cur.ctx.markPx);
+  const age=aggregateSnapshot?(Date.now()/1000-aggregateSnapshot.generated_at_unix)/60:null;
+  const liveAge=cur.liveAt?(Date.now()-cur.liveAt)/1000:Infinity;
+  const watchAge=window.watchlistAt?(Date.now()-window.watchlistAt)/60000:Infinity;
+  const liveText=Number.isFinite(liveAge)?'行情 '+new Date(cur.liveAt).toLocaleTimeString('zh-CN')+(liveAge>60?'（行情已过期）':''):'行情不可用，暂以分桶参考价定位（非实时现价）';
+  $('freshness').className=((watch?watchAge>120:age===null||age>120)||liveAge>60)?'stale':'';
+  $('freshness').textContent=(watch?'Watchlist '+(window.watchlistAt?new Date(window.watchlistAt).toLocaleString('zh-CN')+(watchAge>120?' · ⚠ Watchlist已过期（超过2小时）':''):'尚未拉取'):(aggregateSnapshot?'聚合 '+new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN')+' · '+Math.max(0,Math.floor(age))+'分钟前'+(age>120?' · ⚠ 快照已过期（超过2小时）':''):'尚无聚合快照'))+' ｜ '+liveText+' ｜ 固定分桶参考价 $'+precise(reference);
+}

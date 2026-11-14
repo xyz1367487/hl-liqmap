@@ -140,7 +140,7 @@
 </main>
 
 <script src="chart-core.js?v=d86237d05d00"></script>
-<script src="chart-ui.js?v=3c881f2bdc27"></script>
+<script src="chart-ui.js?v=a8c513b64789"></script>
 <script>
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
@@ -182,41 +182,45 @@ async function fetchAccount(addr){
   return {eq,ps};
 }
 
-async function loadCoins(){
-  let all=[];
-  try{
-    const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
-    all=meta.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:ctxs[i],liveAt:Date.now()}));
-  }catch(error){
-    if(!aggregateSnapshot) throw error;
-    return aggregateSnapshot.coin_list.coins.map(c=>({name:c.n,maxLev:0,ctx:{markPx:aggregateSnapshot.markets[c.n].reference_mark,openInterest:0,dayNtlVlm:c.v,funding:0},liveAt:null}));
-  }
-  // xyz builder dex（股票/商品永续），字段与主 dex 同构
-  try{
-    const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
-    all=all.concat(m2.universe.map((u,i)=>({name:u.name,maxLev:u.maxLeverage||50,ctx:c2[i],liveAt:Date.now()})));
-  }catch(e){}
-  // 优先用收割端算好的 avg_7d 名单（与 HL-UPERP-MONITOR 同口径，每6小时随收割更新），避免每次打开拉304根K线
-  try{
-    const cj=aggregateSnapshot?.coin_list;
-    if(cj){
-      if(cj.coins.length){
-        const names=new Set(cj.coins.map(c=>c.n));
-        window.__coinListInfo=`avg_7d 口径 · 更新于 ${cj.updated||'?'} · ${cj.coins.length} 币`;
-        return all.filter(c=>names.has(c.name))
-          .sort((a,b)=>parseFloat(b.ctx.dayNtlVlm)-parseFloat(a.ctx.dayNtlVlm));
-      }
-    }
-  }catch(e){}
-  // 兜底：coins.json 不可用（首次部署/收割未跑）时退回单日成交>$5M
-  window.__coinListInfo='单日口径（兜底，coins.json 未就绪）';
-  return all.filter(c=>parseFloat(c.ctx.dayNtlVlm)>5e6) // 兜底门槛$5M；正式口径为收割端 avg_7d（见 data/coins.json）
-    .sort((a,b)=>parseFloat(b.ctx.dayNtlVlm)-parseFloat(a.ctx.dayNtlVlm));
+// Cache entries deliberately contain no invented market context.
+function cachedCoins(){
+  return (aggregateSnapshot?.coin_list.coins||[]).map(c=>({name:c.n,maxLev:null,ctx:{markPx:aggregateSnapshot.markets[c.n].reference_mark},liveAt:null}));
 }
+function installCoins(next){
+  const selected=$('coin').value;
+  coins=next;
+  const sel=$('coin');
+  if([...sel.options].map(o=>o.value).join('|')!==coins.map(c=>c.name).join('|')){
+    sel.replaceChildren(...coins.map(c=>{const o=document.createElement('option');o.value=c.name;o.textContent=c.name;return o;}));
+  }
+  sel.value=coins.some(c=>c.name===selected)?selected:coins.some(c=>c.name==='BTC')?'BTC':coins[0]?.name||'';
+  cur=coins.find(c=>c.name===sel.value)||null;
+  $('coinCaliber').textContent=aggregateSnapshot?'avg_7d > $5M':'单日口径（兜底）';
+}
+async function loadCoins(){
+  const results=await Promise.allSettled(['','xyz'].map(dex=>info({type:'metaAndAssetCtxs',...(dex?{dex}:{})})));
+  const live=new Map();
+  for(const result of results){
+    if(result.status!=='fulfilled')continue;
+    const [meta,ctxs]=result.value;
+    meta.universe.forEach((u,i)=>{if(Number(ctxs[i]?.markPx)>0)live.set(u.name,{name:u.name,maxLev:u.maxLeverage??null,ctx:ctxs[i],liveAt:Date.now()});});
+  }
+  if(aggregateSnapshot)return cachedCoins().map(c=>live.get(c.name)||coins.find(old=>old.name===c.name&&old.liveAt)||c);
+  if(!live.size)throw Error('行情与有效聚合均不可用');
+  return [...live.values()].filter(c=>Number(c.ctx.dayNtlVlm)>5e6).sort((a,b)=>Number(b.ctx.dayNtlVlm)-Number(a.ctx.dayNtlVlm));
+}
+function renderContext(){
+  if(!cur){$('ctx').textContent='行情未知；等待有效数据';return;}
+  const e=estimate(cur),f=Number.parseFloat(cur.ctx.funding)*100;
+  const value=(n,format)=>Number.isFinite(n)?format(n):'未知';
+  $('ctx').textContent=cur.liveAt?`标记价 $${fmtPx(e.mark)} · 未平仓名义 ${value(e.oiNtl,n=>'$'+fmtUSD(n))} · 24h成交 ${value(Number.parseFloat(cur.ctx.dayNtlVlm),n=>'$'+fmtUSD(n))} · 资金费率(1h) ${value(f,n=>n.toFixed(4)+'%')} · 最大杠杆 ${cur.maxLev??'未知'}`:'参考定位 $'+fmtPx(cur.ctx.markPx)+'（非实时）；OI、资金费率、24h成交、最大杠杆及估算未知。';
+}
+function selectCoin(){cur=coins.find(c=>c.name===$('coin').value)||null;renderContext();drawChart();}
 
 function estimate(c){
   const mark=parseFloat(c.ctx.markPx), oiNtl=parseFloat(c.ctx.openInterest)*mark, ls=+$('ls').value/100;
   const rows=[];
+  if(!c.liveAt||!Number.isFinite(oiNtl)||!(c.maxLev>0))return {mark,oiNtl:NaN,rows};
   for(const t of TIERS){
     if(t>c.maxLev) continue;
     rows.push({t, liqL:mark*(1-1/t), liqS:mark*(1+1/t), nL:oiNtl*ls*W[t], nS:oiNtl*(1-ls)*W[t]});
@@ -248,37 +252,21 @@ function bucketize(rows,mark,side){
   return Object.values(out).map(o=>({px: side==='L'?o.pxHi:o.pxLo, v:o.v, tag:o.label+'·'+o.n+'仓', real:1}));
 }
 
+let marketRequest=0;
 async function refresh(){
+  const request=++marketRequest;
   clearErr();
   try{
-    if(!coins.length){
-      coins=await loadCoins();
-      const sel=$('coin');
-      sel.innerHTML=coins.map(c=>`<option>${c.name}</option>`).join('');
-      if(coins.some(c=>c.name==='BTC')) sel.value='BTC';
-      sel.onchange=async()=>{ await refresh(); }; // 快照模式切币：图表和表格都跟着走
-      $('coinCaliber').textContent=window.__coinListInfo||'avg_7d > $5M';
-    }else{
-      // 每次刷新重新拉取市场上下文（双 dex；否则 mark/OI/资金费 冻屏在加载时刻）
-      try{
-        const m={};
-        const [meta,ctxs]=await info({type:'metaAndAssetCtxs'});
-        meta.universe.forEach((u,i)=>m[u.name]=ctxs[i]);
-        try{
-          const [m2,c2]=await info({type:'metaAndAssetCtxs',dex:'xyz'});
-          m2.universe.forEach((u,i)=>m[u.name]=c2[i]);
-        }catch(e){}
-        coins.forEach(c=>{ if(m[c.name]){c.ctx=m[c.name];c.liveAt=Date.now();} });
-      }catch(e){}
-    }
-    cur=coins.find(c=>c.name===$('coin').value)||coins[0];
-    const e=estimate(cur), mark=e.mark;
-    const f=parseFloat(cur.ctx.funding)*100;
-    $('ctx').innerHTML=cur.liveAt?`<span>标记价 <b>$${fmtPx(mark)}</b></span><span>未平仓名义 <b>$${fmtUSD(e.oiNtl)}</b></span><span>24h成交 <b>$${fmtUSD(cur.ctx.dayNtlVlm)}</b></span><span>资金费率(1h) <b style="color:${f>=0?'var(--green)':'var(--red)'}">${f.toFixed(4)}%</b></span><span>最大杠杆 <b>${cur.maxLev}x</b></span>`:'行情不可用；图表暂以固定分桶参考价定位，OI、资金费率及估算暂不可用。';
-
-    drawChart();
-    $('status').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN');
-  }catch(e){ showErr(e); }
+    const next=await loadCoins();
+    if(request!==marketRequest)return;
+    // Read the selection only when committing, never restore a pre-request selection/window.
+    installCoins(next);renderContext();drawChart();updateStatus();
+  }catch(e){if(request===marketRequest)showErr(e);}
+}
+function updateStatus(){
+  $('status').textContent=($('auto').checked?'自动更新':'自动更新已关闭')+' · 状态时间 '+new Date().toLocaleTimeString('zh-CN');
+  renderAggregateSummary();
+  if(cur)updateFreshness();
 }
 
 async function pool(items,n,fn){
@@ -373,7 +361,7 @@ async function loadNet(){
   try{
     for(const source of AGGREGATE_SOURCES){
       $('netProg').textContent='正在读取 '+source.name+(aggregateFailures.length?' · '+aggregateFailures.join('；'):'');
-      renderAggregateSummary(); if(cur) drawChart();
+      renderAggregateSummary();
       try{
         const candidate=await readAggregateSource(source);
         if(aggregateSnapshot&&candidate.generated_at_unix<aggregateSnapshot.generated_at_unix){
@@ -395,19 +383,18 @@ async function loadNet(){
     }
   }finally{
     netFetching=false; $('netBtn').disabled=false;
-    renderAggregateSummary(); if(cur) drawChart();
+    renderAggregateSummary();
   }
+  if(!loaded&&cur&&!aggregateSnapshot)drawChart();
   if(loaded){
-    // Refresh the monitored list when a new generation arrives, preserving selection.
-    const selected=$('coin').value;
-    coins=[];
-    await refresh();
-    if(coins.some(c=>c.name===selected)){$('coin').value=selected;await refresh();}
+    installCoins(cachedCoins().map(c=>coins.find(old=>old.name===c.name&&old.liveAt)||c));
+    renderContext();drawChart();
   }
 }
 
 $('ls').oninput=()=>{ $('lsLabel').textContent=$('ls').value+'/'+(100-$('ls').value); drawChart(); };
 $('refresh').onclick=()=>refresh();
+$('coin').onchange=selectCoin;
 $('estToggle').onchange=()=>{ estManual=$('estToggle').checked; drawChart(); };
 $('wlBtn').onclick=loadWatchlist;
 $('wlClear').onclick=()=>{ $('wl').value=''; wlAll=wlAll.filter(p=>p.net); localStorage.removeItem('liqmap_watchlist'); $('wlTable').innerHTML=''; refresh(); };
@@ -425,9 +412,12 @@ $('wl').value=localStorage.getItem('liqmap_watchlist')||'';
     }catch(e){}
     renderAggregateSummary();
   }catch(e){}
-  await loadNet();
-  if(!coins.length) await refresh();
-  setInterval(()=>{if($('auto').checked&&!netFetching) refresh();else if(cur) drawChart();},10000);
+  installCoins(cachedCoins());renderContext();
+  if(cur)drawChart();
+  else $('chartSubtitle').textContent='尚无有效缓存，等待网络数据';
+  // Start independent network paths together, after scheduling the cached first frame.
+  loadNet();refresh();
+  setInterval(()=>{updateStatus();if($('auto').checked)refresh();},10000);
   setInterval(()=>{if($('auto').checked&&!netFetching) loadNet();},30*60000);
 })();
 </script>

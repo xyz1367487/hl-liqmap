@@ -11,7 +11,7 @@ function harness(fetch){
     aggregateSnapshot:null,netFetching:false,cur:null,coins:[],
     $:id=>nodes[id]??=( {textContent:'',value:'BTC',disabled:false}),
     localStorage:{setItem:(k,v)=>storage.set(k,v),getItem:k=>storage.get(k)||null},
-    clearErr(){},drawChart(){},async refresh(){},fetch:async(url,opts)=>{calls.push({url,opts});return fetch(calls.length,url,opts);}});
+    clearErr(){},drawChart(){},installCoins(next){ctx.coins=next;},cachedCoins(){return [];},renderContext(){},async refresh(){},fetch:async(url,opts)=>{calls.push({url,opts});return fetch(calls.length,url,opts);}});
   vm.runInContext(block,ctx);
   return {ctx,nodes,storage,calls,run:code=>vm.runInContext(code,ctx)};
 }
@@ -62,7 +62,7 @@ test('Older fallbacks never replace newer memory or persisted cache; failures pr
 });
 test('Startup retains strictly valid cache older than six hours without clearing storage',()=>{
   const h=harness(()=>response());h.storage.set('liqmap_aggregate_v1',JSON.stringify(sample()));
-  const start=html.indexOf('    const cached=validateAggregate');const end=html.indexOf('\n  }catch(e){}\n  await loadNet();',start);
+  const start=html.indexOf('    const cached=validateAggregate');const end=html.indexOf('\n  }catch(e){}\n  installCoins',start);
   h.run(html.slice(start,end));assert.equal(h.ctx.aggregateSnapshot.generated_at_unix,100);assert.match(h.nodes.netMeta.textContent,/超过2小时/);
 });
 test('Watchlist uses its independent empty state and chart algorithms remain untouched',()=>{
