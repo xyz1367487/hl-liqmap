@@ -8,8 +8,12 @@ import io
 import json
 import os
 import shlex
+import socket
 import stat
+import ssl
 import subprocess
+import traceback
+import urllib.error
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -207,6 +211,123 @@ class SSHPublisherTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 publisher.publish(path)
             ssh.assert_not_called()
+
+
+class PublicMetadataTests(unittest.TestCase):
+    sensitive = 'synthetic-sensitive-marker'
+
+    def http_error(self, code, headers=None):
+        return urllib.error.HTTPError('https://invalid.example/' + self.sensitive,
+                                      code, self.sensitive, headers or {},
+                                      io.BytesIO(self.sensitive.encode()))
+
+    def lookup(self, effects, endpoint='meta', expected=None, attempts=1):
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(publisher.urllib.request, 'urlopen', side_effect=effects) as network, \
+                patch.object(publisher.time, 'sleep') as sleep, \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            if expected is None:
+                result = publisher.public_metadata(endpoint)
+            else:
+                with self.assertRaises(RuntimeError) as caught:
+                    publisher.public_metadata(endpoint)
+                self.assertEqual(str(caught.exception),
+                                 'Public metadata lookup failed (' + expected + f'; attempts={attempts}/3)')
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertTrue(caught.exception.__suppress_context__)
+                rendered = ''.join(traceback.format_exception(
+                    type(caught.exception), caught.exception, caught.exception.__traceback__))
+                self.assertNotIn(self.sensitive, rendered)
+                result = None
+        self.assertNotIn(self.sensitive, out.getvalue() + err.getvalue())
+        self.assertEqual(network.call_count, attempts)
+        self.assertEqual(sleep.call_args_list,
+                         [unittest.mock.call(i + 1) for i in range(attempts - 1)])
+        for args, kwargs in network.call_args_list:
+            self.assertEqual(args, ('https://api.github.com/' + endpoint,))
+            self.assertEqual(kwargs, {'timeout': 30})
+        return result
+
+    def test_transient_failure_then_complete_object_success(self):
+        obj = {'ssh_keys': ['ssh-ed25519 AAAA'], 'extra': {'retained': True}}
+        self.assertEqual(self.lookup([self.http_error(503),
+                                     io.BytesIO(json.dumps(obj).encode())], attempts=2), obj)
+        repo = {'private': False, 'full_name': publisher.PUBLIC_REPO, 'extra': 7}
+        self.assertEqual(self.lookup([io.BytesIO(json.dumps(repo).encode())],
+                                    endpoint='repos/' + publisher.PUBLIC_REPO), repo)
+
+    def test_three_attempts_exhausted_for_429_and_all_5xx(self):
+        for code in (429, 500, 502, 503, 504, 599):
+            with self.subTest(code=code):
+                category = 'http-429-rate-limit' if code == 429 else 'http-' + str(code)
+                self.lookup([self.http_error(code) for _ in range(3)],
+                            expected='meta: ' + category, attempts=3)
+
+    def test_permission_403_and_404_do_not_retry(self):
+        for code in (400, 401, 403, 404):
+            with self.subTest(code=code):
+                self.lookup([self.http_error(code, {'X-RateLimit-Remaining': '5'})],
+                            expected='repos: http-' + str(code),
+                            endpoint='repos/' + publisher.PUBLIC_REPO)
+
+    def test_evidenced_403_rate_limit_has_bounded_backoff(self):
+        for headers in ({'X-RateLimit-Remaining': '0'}, {'Retry-After': '36000'}):
+            with self.subTest(headers=headers):
+                self.lookup([self.http_error(403, headers) for _ in range(3)],
+                            expected='meta: http-403-rate-limit', attempts=3)
+
+    def test_timeout_urlerror_and_connection_failures(self):
+        for make_error, category in (
+                (lambda: TimeoutError(self.sensitive), 'timeout'),
+                (lambda: socket.timeout(self.sensitive), 'timeout'),
+                (lambda: urllib.error.URLError(socket.timeout(self.sensitive)), 'timeout'),
+                (lambda: urllib.error.URLError(TimeoutError(self.sensitive)), 'timeout'),
+                (lambda: urllib.error.URLError(self.sensitive), 'network'),
+                (lambda: ConnectionResetError(self.sensitive), 'connection'),
+                (lambda: OSError(self.sensitive), 'network')):
+            with self.subTest(category=category):
+                self.lookup([make_error() for _ in range(3)],
+                            expected='meta: ' + category, attempts=3)
+                self.assertEqual(self.lookup([make_error(), io.BytesIO(b'{"ok": true}')],
+                                             attempts=2), {'ok': True})
+
+    def test_invalid_json_encoding_and_non_object_do_not_retry(self):
+        for payload in (b'{', b'[]', b'null', b'"text"', b'1', b'\xff'):
+            with self.subTest(payload=payload):
+                self.lookup([io.BytesIO(payload)], expected='meta: invalid-json-or-schema')
+
+    def test_tls_and_unexpected_errors_are_safe_and_permanent(self):
+        for error, category in (
+                (ssl.SSLCertVerificationError(self.sensitive), 'tls'),
+                (urllib.error.URLError(ssl.SSLCertVerificationError(self.sensitive)), 'tls'),
+                (RuntimeError(self.sensitive), 'unexpected')):
+            with self.subTest(category=category):
+                self.lookup([error], expected='meta: ' + category)
+
+    def test_unknown_endpoint_refused_before_network(self):
+        with patch.object(publisher.urllib.request, 'urlopen') as network:
+            with self.assertRaisesRegex(RuntimeError, r'failed \(endpoint\)'):
+                publisher.public_metadata('repos/private-example')
+            network.assert_not_called()
+
+    def test_wrong_repository_and_host_schema_are_not_retried(self):
+        for responses, message, attempts in (
+                ([{'private': True, 'full_name': publisher.PUBLIC_REPO}],
+                 'Unexpected public repository', 1),
+                ([{'private': False, 'full_name': 'wrong'}],
+                 'Unexpected public repository', 1),
+                ([{'private': False, 'full_name': publisher.PUBLIC_REPO}, {'ssh_keys': []}],
+                 'Invalid SSH host metadata', 2)):
+            with self.subTest(message=message), \
+                    patch.object(publisher.urllib.request, 'urlopen', side_effect=[
+                        io.BytesIO(json.dumps(obj).encode()) for obj in responses]) as network, \
+                    patch.object(publisher.time, 'sleep') as sleep, \
+                    patch.object(publisher.subprocess, 'run') as git:
+                with self.assertRaisesRegex(RuntimeError, message):
+                    publisher.publish_ssh(SAMPLE, FAKE_KEY)
+                self.assertEqual(network.call_count, attempts)
+                sleep.assert_not_called()
+                git.assert_not_called()
 
 
 if __name__ == '__main__':

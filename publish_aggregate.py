@@ -6,7 +6,10 @@ import json
 import os
 import re
 import shlex
+import socket
+import ssl
 import subprocess
+import time
 import tempfile
 import urllib.error
 import urllib.request
@@ -65,12 +68,51 @@ def publish(path):
 
 
 def public_metadata(endpoint):
-    # urlopen uses the default TLS certificate/hostname verification.
-    try:
-        with urllib.request.urlopen('https://api.github.com/' + endpoint, timeout=30) as response:
-            return json.load(response)
-    except Exception:
-        raise RuntimeError('Public metadata lookup failed') from None
+    labels = {'repos/' + PUBLIC_REPO: 'repos', 'meta': 'meta'}
+    if endpoint not in labels:
+        raise RuntimeError('Public metadata lookup failed (endpoint)') from None
+    label = labels[endpoint]
+    # Only these public GETs retry; TLS verification and caller validation remain.
+    for attempt in range(3):
+        retry = False
+        try:
+            with urllib.request.urlopen('https://api.github.com/' + endpoint, timeout=30) as response:
+                result = json.load(response)
+            if not isinstance(result, dict):
+                raise ValueError('Expected JSON object')
+            return result
+        except urllib.error.HTTPError as error:
+            code = error.code
+            # Read only evidence of rate limiting, never log headers/body/reason.
+            headers = error.headers or {}
+            rate_limited = code == 429 or (code == 403 and (
+                headers.get('X-RateLimit-Remaining') == '0' or
+                headers.get('Retry-After') is not None))
+            category = 'http-' + str(code) + ('-rate-limit' if rate_limited else '')
+            retry = rate_limited or 500 <= code <= 599
+            error.close()
+        except ssl.SSLError:
+            category = 'tls'
+        except (ValueError, UnicodeError):
+            category = 'invalid-json-or-schema'
+        except (TimeoutError, socket.timeout):
+            category, retry = 'timeout', True
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, ssl.SSLError):
+                category = 'tls'
+            else:
+                category = 'timeout' if isinstance(error.reason, (TimeoutError, socket.timeout)) else 'network'
+                retry = True
+        except ConnectionError:
+            category, retry = 'connection', True
+        except OSError:
+            category, retry = 'network', True
+        except Exception:
+            category = 'unexpected'
+        if not retry or attempt == 2:
+            raise RuntimeError(f'Public metadata lookup failed ({label}: {category}; attempts={attempt + 1}/3)') from None
+        # Do not honor unbounded server Retry-After delays.
+        time.sleep(attempt + 1)
 
 
 def publish_ssh(data, key):
