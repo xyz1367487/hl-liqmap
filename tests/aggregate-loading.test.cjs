@@ -69,3 +69,24 @@ test('Watchlist uses its independent empty state and chart algorithms remain unt
   const ui=fs.readFileSync(__dirname+'/../chart-ui.js','utf8');
   assert.ok(ui.includes("watch?'Watchlist 尚无该币有效强平价，请先拉取仓位':aggregateEmptyText()"));
 });
+
+test('读取失败与数据过期分开表述：失败时提示后台可能仍在运行，重试入口可见', () => {
+  const fs = require('node:fs');
+  const ui = fs.readFileSync(__dirname + '/../chart-ui.js', 'utf8');
+  // 两件事必须分别判断：数据真的旧（staleData）和本次读不到（fetchFailed）
+  assert.match(ui, /const staleData=!watch&&age!==null&&age>120/);
+  assert.match(ui, /const fetchFailed=!watch&&aggregateState==='error'/);
+  // 失败时不能只说"快照已过期"，必须说明后台采集可能仍在运行并给出重试指引
+  assert.match(ui, /本机读取失败，正在显示缓存；后台采集可能仍在运行/);
+  assert.match(ui, /请点"刷新快照"重试/);
+  // 真正的数据停滞仍然保留原来的过期提示，不被失败文案吞掉
+  assert.match(ui, /快照已停滞超过2小时/);
+  // 只有数据过期或读取失败才标 stale，正常新鲜数据不得进 stale 分支
+  assert.match(ui, /\(\(watch\?watchAge>120:age===null\|\|staleData\)\|\|liveAge>60\|\|fetchFailed\)\?'stale':''/);
+
+  const page = fs.readFileSync(__dirname + '/../index.html', 'utf8');
+  assert.match(page, /本机读取聚合失败，正在显示缓存（后台采集可能仍在运行）/);
+  assert.match(page, /聚合读取失败（网络或数据源不可用）/);
+  // 失败文案里不得把原因说成采集停止
+  assert.ok(!/聚合读取失败[^']*采集已停/.test(page));
+});

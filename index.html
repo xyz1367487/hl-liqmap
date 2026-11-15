@@ -140,7 +140,7 @@
 </main>
 
 <script src="chart-core.js?v=d86237d05d00"></script>
-<script src="chart-ui.js?v=a8c513b64789"></script>
+<script src="chart-ui.js?v=e1ad2a5f3d50"></script>
 <script>
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
@@ -379,7 +379,8 @@ async function loadNet(){
     }
     if(!loaded){
       aggregateState='error';
-      $('netProg').textContent=(aggregateSnapshot?'更新失败，保留有效聚合快照':'聚合读取失败')+' · '+aggregateFailures.join('；');
+      // 明确区分"读不到"和"数据旧"：这里只是本次读取失败，不代表后台采集停了。
+      $('netProg').textContent=(aggregateSnapshot?'本机读取聚合失败，正在显示缓存（后台采集可能仍在运行）':'聚合读取失败（网络或数据源不可用）')+' · '+aggregateFailures.join('；');
     }
   }finally{
     netFetching=false; $('netBtn').disabled=false;

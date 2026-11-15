@@ -441,6 +441,20 @@ function updateFreshness(){
   const liveAge=cur.liveAt?(Date.now()-cur.liveAt)/1000:Infinity;
   const watchAge=window.watchlistAt?(Date.now()-window.watchlistAt)/60000:Infinity;
   const liveText=Number.isFinite(liveAge)?'行情 '+new Date(cur.liveAt).toLocaleTimeString('zh-CN')+(liveAge>60?'（行情已过期）':''):'行情不可用，暂以分桶参考价定位（非实时现价）';
-  $('freshness').className=((watch?watchAge>120:age===null||age>120)||liveAge>60)?'stale':'';
-  $('freshness').textContent=(watch?'Watchlist '+(window.watchlistAt?new Date(window.watchlistAt).toLocaleString('zh-CN')+(watchAge>120?' · ⚠ Watchlist已过期（超过2小时）':''):'尚未拉取'):(aggregateSnapshot?'聚合 '+new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN')+' · '+Math.max(0,Math.floor(age))+'分钟前'+(age>120?' · ⚠ 快照已过期（超过2小时）':''):'尚无聚合快照'))+' ｜ '+liveText+' ｜ 固定分桶参考价 $'+precise(reference);
+  // 数据旧 和 读不到新数据 是两件事：后台可能正常在采，只是这个浏览器没拿到。
+  // 混成一句"快照已过期"会让用户以为采集停了，所以分开表述。
+  const staleData=!watch&&age!==null&&age>120;
+  const fetchFailed=!watch&&aggregateState==='error';
+  $('freshness').className=((watch?watchAge>120:age===null||staleData)||liveAge>60||fetchFailed)?'stale':'';
+  let aggregateText;
+  if(watch) aggregateText='Watchlist '+(window.watchlistAt?new Date(window.watchlistAt).toLocaleString('zh-CN')+(watchAge>120?' · ⚠ Watchlist已过期（超过2小时）':''):'尚未拉取');
+  else if(!aggregateSnapshot) aggregateText='尚无聚合快照';
+  else{
+    const stamp=new Date(aggregateSnapshot.generated_at_unix*1000).toLocaleString('zh-CN');
+    const ageText=Math.max(0,Math.floor(age))+'分钟前';
+    if(fetchFailed) aggregateText='聚合 '+stamp+'（'+ageText+'，本机读取失败，正在显示缓存；后台采集可能仍在运行，请点"刷新快照"重试）';
+    else if(staleData) aggregateText='聚合 '+stamp+' · '+ageText+' · ⚠ 快照已停滞超过2小时';
+    else aggregateText='聚合 '+stamp+' · '+ageText;
+  }
+  $('freshness').textContent=aggregateText+' ｜ '+liveText+' ｜ 固定分桶参考价 $'+precise(reference);
 }
