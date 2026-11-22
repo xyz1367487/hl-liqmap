@@ -50,7 +50,7 @@ function paintChart(){
   const stackValue=b=>stackable&&Array.isArray(b.lev)?b.lev.reduce((s,v,i)=>s+(levShown(i)?v:0),0):b.notional;
   const identity=cur.name+':'+$('source').value;
   if(chartIdentity!==identity){chartWindow=null;chartIdentity=identity;keyboardPrice=null;closeReadout();}
-  if(!chartWindow){const span=+$('span').value;chartWindow=[Math.max(mark*(1-span),mark*.0001),mark*(1+span)];}
+  if(!chartWindow){const span=+$('span').value/100;chartWindow=[Math.max(mark*(1-span),mark*.0001),mark*(1+span)];}
   const [min,max]=chartWindow;
   $('priceMin').value=Number(min.toPrecision(10));$('priceMax').value=Number(max.toPrecision(10));
   const visible=bars.filter(b=>b.hi>=min&&b.lo<=max);
@@ -355,7 +355,15 @@ function wireChart(){
     event.preventDefault();zoomChart(event.deltaY>0?1.15:1/1.15);
   },{passive:false});
   $('source').onchange=()=>{closeReadout();drawChart();};$('resolution').onchange=()=>{closeReadout();drawChart();};
-  $('span').onchange=()=>{chartWindow=null;closeReadout();drawChart();};
+  const spanLabel=$('spanLabel'),applySpan=()=>{
+    // 滑块是百分比（1–100），窗口上下各扩这么多。
+    const pct=+$('span').value;
+    if(spanLabel){spanLabel.textContent='±'+pct+'%';$('span').setAttribute('aria-valuetext','±'+pct+'%');}
+    chartWindow=null;closeReadout();drawChart();
+  };
+  // input 事件让拖动过程实时跟随；change 兜底（键盘/无障碍触发只发 change）。
+  $('span').addEventListener('input',applySpan);
+  $('span').addEventListener('change',applySpan);
   $('resetView').onclick=()=>{chartWindow=null;closeReadout();drawChart();};
   $('zoomIn').onclick=()=>zoomChart(.65);$('zoomOut').onclick=()=>zoomChart(1/.65);
   $('applyRange').onclick=()=>{
