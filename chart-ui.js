@@ -52,6 +52,7 @@ function paintChart(){
   if(chartIdentity!==identity){chartWindow=null;chartIdentity=identity;keyboardPrice=null;closeReadout();}
   if(!chartWindow){const span=+$('span').value/100;chartWindow=[Math.max(mark*(1-span),mark*.0001),mark*(1+span)];}
   const [min,max]=chartWindow;
+  syncSpanFromWindow();
   $('priceMin').value=Number(min.toPrecision(10));$('priceMax').value=Number(max.toPrecision(10));
   const visible=bars.filter(b=>b.hi>=min&&b.lo<=max);
   const showEst=$('estToggle').checked, e=estimate(cur);
@@ -287,6 +288,24 @@ function renderNavigator(){
   $('navSelection').disabled=!base.length;
   $('navBounds').textContent=`全分布 $${precise(domain[0])} — $${precise(domain[1])} · 选区 $${precise(chartWindow[0])} — $${precise(chartWindow[1])}`;
   window.chartInspection.domain=[...domain];window.chartInspection.hiddenSeries=[...hiddenSeries];
+}
+// 窗口的改动来源很多（滑块、滚轮、拖动、导航条、手填上下限、重置），
+// 统一在重绘时把当前窗口反算成「±N%」，滑块和标签才不会与实际视图脱节。
+// 窗口可能不对称（拖动或手填会把中心移开），此时取较远的一侧，保证滑块值能覆盖整个视图。
+function syncSpanFromWindow(){
+  // 现价在 cur.ctx.markPx（cur 本身只有 name/maxLev/ctx/liveAt 四个字段）。
+  const mark=cur&&cur.ctx?+cur.ctx.markPx:NaN;
+  if(!chartWindow||!Number.isFinite(mark)||mark<=0)return;
+  // 用半宽表示：滑块 = 窗口宽度的一半 / 现价。居中时与旧的 +/-N% 一致；
+  // 拖动把中心移开后仍反映真实缩放程度，不因不对称而虚高。
+  const pct=Math.round((chartWindow[1]-chartWindow[0])/2/mark*100);
+  const clamped=Math.min(100,Math.max(1,pct));
+  const el=$('span'),label=$('spanLabel');
+  if(el){
+    if(+el.value!==clamped)el.value=String(clamped);
+    el.setAttribute('aria-valuetext','\u00b1'+clamped+'%');
+  }
+  if(label)label.textContent='\u00b1'+clamped+'%';
 }
 function zoomChart(scale){
   if(!chartWindow)return;
