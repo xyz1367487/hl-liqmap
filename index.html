@@ -21,7 +21,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HL 清算地图 · 潜在强平分布</title>
-<link rel="stylesheet" href="chart.css?v=2c5548ac1d0e">
+<link rel="stylesheet" href="chart.css?v=2bd1e53b7527">
 <link rel="preconnect" href="https://api.hyperliquid.xyz">
 <style>
   :root{ --bg:#0d1117; --card:#161b22; --border:#2d333b; --fg:#e6edf3; --muted:#8b949e; --green:#3fb950; --red:#f85149; --blue:#58a6ff; --amber:#d29922; }
@@ -81,7 +81,7 @@
   <div class="card">
     <div class="ctl main-toolbar">
       <label for="coin">币种</label><select id="coin" aria-label="币种"></select>
-      <label for="span">窗口</label><select id="span"><option value="0.02">±2%</option><option value="0.08" selected>±8%</option><option value="0.25">±25%</option><option value="0.5">±50%</option><option value="1">±100%</option></select>
+      <label for="span">窗口</label><input type="range" id="span" min="1" max="100" step="1" value="8" aria-label="价格窗口百分比，每跳 1%" aria-valuetext="±8%"><output id="spanLabel" for="span">±8%</output>
       <label for="resolution">分辨率</label><select id="resolution"><option value="1">5bp</option><option value="2">10bp</option><option value="5">25bp</option><option value="10">50bp</option></select>
       <label for="source">来源</label><select id="source"><option value="aggregate">公开聚合</option><option value="watchlist">本机 Watchlist</option></select>
       <label class="chk"><input type="checkbox" id="auto" checked> 10秒行情</label>
@@ -140,7 +140,7 @@
 </main>
 
 <script src="chart-core.js?v=d86237d05d00"></script>
-<script src="chart-ui.js?v=e1ad2a5f3d50"></script>
+<script src="chart-ui.js?v=bf6ee4364bd8"></script>
 <script>
 const API='https://api.hyperliquid.xyz/info';
 const TIERS=[3,5,10,20,25,40,50], W={3:.10,5:.20,10:.30,20:.20,25:.10,40:.07,50:.03};
